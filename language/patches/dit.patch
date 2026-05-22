@@ -16,7 +16,7 @@
 >        
 >         # 1. Gather only the k+1 embedding vectors
 >         top_embeddings = self.embedding[indices] # (B, T, k+1, E)
-396a398,412
+396a398,417
 >         # 2. Scale and sum
 >         scaled_embeddings = top_embeddings * probs.unsqueeze(-1) # (B, T, k+1, E)
 >         final_embedding = torch.sum(scaled_embeddings, dim=2) # (B, T, E)
@@ -27,6 +27,11 @@
 >     elif x.ndim == 2:
 >         return self.embedding[x]
 >      
+>     # Pre-embedded soft tokens (last dim == embedding dim): pass through.
+>     # Used by SLERP soft-masking, which produces inputs_embeds directly.
+>     elif x.ndim == 3 and x.shape[-1] == self.embedding.shape[1]:
+>         return x
+> 
 >     # Dense (full distribution)
 >     elif x.ndim == 3:
 >         # slow `einsum` path

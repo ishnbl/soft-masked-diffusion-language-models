@@ -174,7 +174,13 @@ class MDLM_SM(MDLM):
     with torch.cuda.amp.autocast(dtype=torch.float32):
       if log_p_x0 is not None:
           # If previous predictions are available, create a soft-masked input
-          p_x0_sm = self.tran_head(xt, log_p_x0)
+          if self.tran_head.transparency_alg == "slerp_sm":
+              # SLERP feedback works in embedding space and returns inputs_embeds
+              # directly (B,T,D); the DIT embedding layer passes these through.
+              embedding_matrix = self.backbone.vocab_embed.embedding
+              p_x0_sm = self.tran_head(xt, log_p_x0, embedding_matrix=embedding_matrix)
+          else:
+              p_x0_sm = self.tran_head(xt, log_p_x0)
           model_output = self.backbone(p_x0_sm, sigma=sigma_processed)
       else:
           # Standard forward pass if no previous prediction is available
