@@ -148,14 +148,23 @@ class MDLM_SM(MDLM):
       return [optimizer], [scheduler_dict]
 
   def training_step(self, batch, batch_idx):
-      # Log the computed transparency parameters
+      # Run the forward/loss first so the realized-interpolation stats below
+      # reflect the current step.
+      loss = super().training_step(batch, batch_idx)
+
+      # Log the learnable transparency parameters.
       self.log('transparency/scale', self.tran_head.scale.item(), on_step=True, on_epoch=False, sync_dist=True)
       self.log('transparency/centre', self.tran_head.centre.item(), on_step=True, on_epoch=False, sync_dist=True)
       self.log('transparency/steepness', self.tran_head.steepness.item(), on_step=True, on_epoch=False, sync_dist=True)
       self.log('transparency/temperature', self.tran_head.temperature.item(), on_step=True, on_epoch=False, sync_dist=True)
 
-      # Call the parent training_step to compute and return the loss
-      return super().training_step(batch, batch_idx)
+      # Log the realized interpolation behavior (set during the head's forward).
+      if self.tran_head.last_lambda_mean is not None:
+          self.log('transparency/lambda_mean', self.tran_head.last_lambda_mean.item(), on_step=True, on_epoch=False, sync_dist=True)
+      if self.tran_head.last_slerp_angle_mean is not None:
+          self.log('transparency/slerp_angle_mean', self.tran_head.last_slerp_angle_mean.item(), on_step=True, on_epoch=False, sync_dist=True)
+
+      return loss
 
   def forward(self, xt, sigma, log_p_x0=None):
     """

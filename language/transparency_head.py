@@ -46,7 +46,7 @@ def frechet_mean_sphere(vhat, weights, n_iter, eps):
 
 
 def slerp_sm_feedback(input_ids, logits, embedding_matrix, mask_token_id,
-                      lambda_tensor, top_k, n_iter=3, eps=1e-6):
+                      lambda_tensor, top_k, n_iter=3, eps=1e-6, stats=None):
     """
     Soft-mask feedback in embedding space.
 
@@ -58,6 +58,8 @@ def slerp_sm_feedback(input_ids, logits, embedding_matrix, mask_token_id,
     logits:           (B, T, V)  feedback logits from the previous pass
     embedding_matrix: (V, D)     token embedding table E
     lambda_tensor:    (B, T, 1)  SLERP weight, 0 on non-mask positions
+    stats:            optional dict; if given, gets "slerp_angle_mean" (the mean
+                      SLERP angle over masked positions) for live logging
     Returns:          (B, T, D)  soft input embeddings
     """
     compute_dtype = torch.float32
@@ -90,6 +92,11 @@ def slerp_sm_feedback(input_ids, logits, embedding_matrix, mask_token_id,
     mask_positions = (input_ids == mask_token_id).unsqueeze(-1)       # (B, T, 1)
     out = torch.where(mask_positions, slerp, E[input_ids])
 
+    if stats is not None:
+        masked = mask_positions.squeeze(-1)                           # (B, T)
+        if masked.any():
+            stats["slerp_angle_mean"] = omega.squeeze(-1)[masked].mean().detach()
+
     return out.to(embedding_matrix.dtype)
 
 class TransparencyHead(nn.Module):
@@ -115,6 +122,11 @@ class TransparencyHead(nn.Module):
         self.slerp_n_iter = getattr(trans_args, "slerp_n_iter", 3)
 
         self.epsilon = 1e-6
+
+        # Realized interpolation stats from the most recent forward (for logging
+        # only; plain attrs so they never enter state_dict / EMA).
+        self.last_lambda_mean = None
+        self.last_slerp_angle_mean = None
 
     @property
     def scale(self):
@@ -168,13 +180,21 @@ class TransparencyHead(nn.Module):
         lambda_tensor = lambda_tensor.unsqueeze(-1)  # (B, T, 1)
         lambda_tensor[~mask_positions] = 0.0
 
+        # Stash the realized mean lambda over masked positions (live logging).
+        if mask_positions.any():
+            self.last_lambda_mean = lambda_tensor.squeeze(-1)[mask_positions].mean().detach()
+
         if self.transparency_alg == "slerp_sm":
             # Spherical feedback in embedding space; returns inputs_embeds (B,T,D).
             assert embedding_matrix is not None, \
                 "transparency_alg='slerp_sm' requires the token embedding matrix"
-            return slerp_sm_feedback(
+            stats = {}
+            out = slerp_sm_feedback(
                 input_ids, logits_prelim, embedding_matrix, self.mask_token_id,
-                lambda_tensor, self.mixinputs_k, self.slerp_n_iter, self.epsilon)
+                lambda_tensor, self.mixinputs_k, self.slerp_n_iter, self.epsilon,
+                stats=stats)
+            self.last_slerp_angle_mean = stats.get("slerp_angle_mean")
+            return out
 
         if self.transparency_alg == "mixinputs_with_topk":
             # GATHER: Select only the logits for masked positions
