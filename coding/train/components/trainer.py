@@ -89,14 +89,17 @@ class dLLMTrainer(Trainer):
             # if we are using embeddings, remove input_ids
             x_t = inputs.pop("input_ids")
 
-            # Set the input_embeds via the transparency head forward pass
-            p_sm = th_module(x_t, logits_prelim) # (B,T,V)
-
-            # First get the input embeddings
+            # First get the input embedding table
             W = model.get_input_embeddings().weight  # (V,D)
-            p_sm = p_sm.to(dtype=W.dtype, device=W.device) # (B,T,V)
 
-            inputs["inputs_embeds"] = torch.matmul(p_sm, W)  # (B,T,D)
+            if th_module.transparency_alg == "slerp_sm":
+                # SLERP feedback produces input embeddings directly (B,T,D).
+                inputs["inputs_embeds"] = th_module(x_t, logits_prelim, embedding_matrix=W)
+            else:
+                # Set the input_embeds via the transparency head forward pass
+                p_sm = th_module(x_t, logits_prelim) # (B,T,V)
+                p_sm = p_sm.to(dtype=W.dtype, device=W.device) # (B,T,V)
+                inputs["inputs_embeds"] = torch.matmul(p_sm, W)  # (B,T,D)
 
         if self.loss_calc == "model_weighted":
             outputs = model(**inputs, labels=labels)

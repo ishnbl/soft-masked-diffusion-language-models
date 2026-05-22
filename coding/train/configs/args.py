@@ -27,7 +27,9 @@ class DatasetArgs:
 class TransparencyArgs:
 
     mixinputs_k: int = 3
-    transparency_alg: str = "mixinputs_with_topk"  # Options: "mixinputs", "
+    # Options: "mixinputs_with_topk", "mixinputs_with_temp", "slerp_sm"
+    transparency_alg: str = "mixinputs_with_topk"
+    slerp_n_iter: int = 3  # Frechet-mean iterations used by "slerp_sm"
 
     init_scale: float = 0.0
     init_centre: float = -0.75

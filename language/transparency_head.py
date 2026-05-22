@@ -9,10 +9,95 @@ import torch.nn.functional as F
 
 def softplus_inv_param(init) -> torch.Tensor:
     """
-    Given a desired initial value `init` for a parameter that will be transformed. 
+    Given a desired initial value `init` for a parameter that will be transformed.
     This will ensure that the parameter is always positive.
     """
     return nn.Parameter(torch.log(torch.expm1(torch.tensor(init, dtype=torch.float32))))
+
+
+def frechet_mean_sphere(vhat, weights, n_iter, eps):
+    """
+    Weighted Frechet (Karcher) mean of points on the unit hypersphere S^{d-1}.
+
+    vhat:    (..., k, D) unit vectors (already L2-normalised over D)
+    weights: (..., k)    non-negative weights that sum to 1 over the k axis
+    Returns: (..., D)    unit vector
+    """
+    # Initialise at the highest-weight point (top-1 token).
+    mu = F.normalize(vhat[..., 0, :], dim=-1, eps=eps)        # (..., D)
+    w = weights.unsqueeze(-1)                                  # (..., k, 1)
+    for _ in range(n_iter):
+        # cos of the angle between mu and each v_i
+        cos = (mu.unsqueeze(-2) * vhat).sum(-1).clamp(-1 + eps, 1 - eps)  # (..., k)
+        omega = torch.acos(cos)                                # (..., k)
+        sin_omega = torch.sin(omega)
+        # log map at mu: ratio = omega / sin(omega) -> 1 as omega -> 0
+        ratio = torch.where(sin_omega > eps,
+                            omega / sin_omega.clamp_min(eps),
+                            torch.ones_like(omega))
+        tang = ratio.unsqueeze(-1) * (vhat - cos.unsqueeze(-1) * mu.unsqueeze(-2))  # (..., k, D)
+        tau = (w * tang).sum(-2)                               # (..., D)
+        tau_norm = tau.norm(dim=-1, keepdim=True)              # (..., 1)
+        direction = tau / tau_norm.clamp_min(eps)
+        # exp map back onto the sphere; as tau_norm -> 0 this leaves mu unchanged
+        mu = torch.cos(tau_norm) * mu + torch.sin(tau_norm) * direction
+        mu = F.normalize(mu, dim=-1, eps=eps)
+    return mu
+
+
+def slerp_sm_feedback(input_ids, logits, embedding_matrix, mask_token_id,
+                      lambda_tensor, top_k, n_iter=3, eps=1e-6, stats=None):
+    """
+    Soft-mask feedback in embedding space.
+
+    For each masked position we SLERP between the (normalised) mask-token
+    embedding and the Frechet mean of the top-k predicted token embeddings on
+    the unit hypersphere. Unmasked positions keep their own token embedding.
+
+    input_ids:        (B, T)     current (partially masked) token ids
+    logits:           (B, T, V)  feedback logits from the previous pass
+    embedding_matrix: (V, D)     token embedding table E
+    lambda_tensor:    (B, T, 1)  SLERP weight, 0 on non-mask positions
+    stats:            optional dict; if given, gets "slerp_angle_mean" (the mean
+                      SLERP angle over masked positions) for live logging
+    Returns:          (B, T, D)  soft input embeddings
+    """
+    compute_dtype = torch.float32
+    E = embedding_matrix.to(compute_dtype)                     # (V, D)
+
+    # Top-k tokens and renormalised weights pi (== softmax over the top-k logits).
+    topk_logits, topk_indices = torch.topk(logits, k=top_k, dim=-1)   # (B, T, k)
+    pi = torch.softmax(topk_logits.to(compute_dtype), dim=-1)         # (B, T, k)
+
+    # Unit embeddings of the top-k tokens and Frechet mean mu*.
+    vhat = F.normalize(E[topk_indices], dim=-1, eps=eps)       # (B, T, k, D)
+    mu = frechet_mean_sphere(vhat, pi, n_iter, eps)            # (B, T, D)
+
+    # Normalised mask embedding m_hat.
+    mhat = F.normalize(E[mask_token_id], dim=-1, eps=eps)      # (D,)
+    mhat = mhat.expand_as(mu)                                  # (B, T, D)
+
+    # SLERP(m_hat, mu*, lambda).
+    lam = lambda_tensor.to(compute_dtype)                      # (B, T, 1)
+    cos = (mhat * mu).sum(-1, keepdim=True).clamp(-1 + eps, 1 - eps)  # (B, T, 1)
+    omega = torch.acos(cos)                                    # (B, T, 1)
+    sin_omega = torch.sin(omega).clamp_min(eps)
+    coeff_m = torch.sin((1 - lam) * omega) / sin_omega
+    coeff_mu = torch.sin(lam * omega) / sin_omega
+    slerp = coeff_m * mhat + coeff_mu * mu                     # (B, T, D)
+    # When mask and mean are ~identical the SLERP is undefined -> return m_hat.
+    slerp = torch.where(omega < eps, mhat, slerp)
+
+    # Unmasked positions are returned unchanged (their own token embedding).
+    mask_positions = (input_ids == mask_token_id).unsqueeze(-1)       # (B, T, 1)
+    out = torch.where(mask_positions, slerp, E[input_ids])
+
+    if stats is not None:
+        masked = mask_positions.squeeze(-1)                           # (B, T)
+        if masked.any():
+            stats["slerp_angle_mean"] = omega.squeeze(-1)[masked].mean().detach()
+
+    return out.to(embedding_matrix.dtype)
 
 class TransparencyHead(nn.Module):
     def __init__(self, mask_token_id, trans_args):
@@ -32,10 +117,16 @@ class TransparencyHead(nn.Module):
         self.raw_steep = softplus_inv_param(init_steep)
         self.raw_temperature = softplus_inv_param(init_temperature)
 
-        self.mixinputs_k = getattr(trans_args, "mixinputs_k", 3) 
+        self.mixinputs_k = getattr(trans_args, "mixinputs_k", 3)
         self.transparency_alg = getattr(trans_args, "transparency_alg", "mixinputs_with_topk")
+        self.slerp_n_iter = getattr(trans_args, "slerp_n_iter", 3)
 
         self.epsilon = 1e-6
+
+        # Realized interpolation stats from the most recent forward (for logging
+        # only; plain attrs so they never enter state_dict / EMA).
+        self.last_lambda_mean = None
+        self.last_slerp_angle_mean = None
 
     @property
     def scale(self):
@@ -77,17 +168,33 @@ class TransparencyHead(nn.Module):
         return lambda_tensor
 
     
-    def forward(self, input_ids, logits_prelim):
-        
+    def forward(self, input_ids, logits_prelim, embedding_matrix=None):
+
         # --- 1. Get Entropy and Lambda (No change) ---
         temperature = self.temperature if self.transparency_alg == "mixinputs_with_temp" else 1.0
         neg_entropy, p_full = self.get_neg_entropy_and_probabilities(logits_prelim, temperature=temperature)
 
         mask_positions = (input_ids == self.mask_token_id)
-        
+
         lambda_tensor = self.calculate_lambda_tensor(neg_entropy, mask_positions)
         lambda_tensor = lambda_tensor.unsqueeze(-1)  # (B, T, 1)
         lambda_tensor[~mask_positions] = 0.0
+
+        # Stash the realized mean lambda over masked positions (live logging).
+        if mask_positions.any():
+            self.last_lambda_mean = lambda_tensor.squeeze(-1)[mask_positions].mean().detach()
+
+        if self.transparency_alg == "slerp_sm":
+            # Spherical feedback in embedding space; returns inputs_embeds (B,T,D).
+            assert embedding_matrix is not None, \
+                "transparency_alg='slerp_sm' requires the token embedding matrix"
+            stats = {}
+            out = slerp_sm_feedback(
+                input_ids, logits_prelim, embedding_matrix, self.mask_token_id,
+                lambda_tensor, self.mixinputs_k, self.slerp_n_iter, self.epsilon,
+                stats=stats)
+            self.last_slerp_angle_mean = stats.get("slerp_angle_mean")
+            return out
 
         if self.transparency_alg == "mixinputs_with_topk":
             # GATHER: Select only the logits for masked positions

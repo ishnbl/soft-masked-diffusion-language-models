@@ -148,14 +148,23 @@ class MDLM_SM(MDLM):
       return [optimizer], [scheduler_dict]
 
   def training_step(self, batch, batch_idx):
-      # Log the computed transparency parameters
+      # Run the forward/loss first so the realized-interpolation stats below
+      # reflect the current step.
+      loss = super().training_step(batch, batch_idx)
+
+      # Log the learnable transparency parameters.
       self.log('transparency/scale', self.tran_head.scale.item(), on_step=True, on_epoch=False, sync_dist=True)
       self.log('transparency/centre', self.tran_head.centre.item(), on_step=True, on_epoch=False, sync_dist=True)
       self.log('transparency/steepness', self.tran_head.steepness.item(), on_step=True, on_epoch=False, sync_dist=True)
       self.log('transparency/temperature', self.tran_head.temperature.item(), on_step=True, on_epoch=False, sync_dist=True)
 
-      # Call the parent training_step to compute and return the loss
-      return super().training_step(batch, batch_idx)
+      # Log the realized interpolation behavior (set during the head's forward).
+      if self.tran_head.last_lambda_mean is not None:
+          self.log('transparency/lambda_mean', self.tran_head.last_lambda_mean.item(), on_step=True, on_epoch=False, sync_dist=True)
+      if self.tran_head.last_slerp_angle_mean is not None:
+          self.log('transparency/slerp_angle_mean', self.tran_head.last_slerp_angle_mean.item(), on_step=True, on_epoch=False, sync_dist=True)
+
+      return loss
 
   def forward(self, xt, sigma, log_p_x0=None):
     """
@@ -174,7 +183,13 @@ class MDLM_SM(MDLM):
     with torch.cuda.amp.autocast(dtype=torch.float32):
       if log_p_x0 is not None:
           # If previous predictions are available, create a soft-masked input
-          p_x0_sm = self.tran_head(xt, log_p_x0)
+          if self.tran_head.transparency_alg == "slerp_sm":
+              # SLERP feedback works in embedding space and returns inputs_embeds
+              # directly (B,T,D); the DIT embedding layer passes these through.
+              embedding_matrix = self.backbone.vocab_embed.embedding
+              p_x0_sm = self.tran_head(xt, log_p_x0, embedding_matrix=embedding_matrix)
+          else:
+              p_x0_sm = self.tran_head(xt, log_p_x0)
           model_output = self.backbone(p_x0_sm, sigma=sigma_processed)
       else:
           # Standard forward pass if no previous prediction is available
