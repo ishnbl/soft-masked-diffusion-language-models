@@ -46,6 +46,7 @@ COMMON=(
   seed="$SEED"
   loader.batch_size="$BATCH_SIZE"
   loader.eval_batch_size="$BATCH_SIZE"
+  trainer.devices=1
   trainer.max_steps="$MAX_STEPS"
   trainer.val_check_interval=500
   trainer.log_every_n_steps=50
