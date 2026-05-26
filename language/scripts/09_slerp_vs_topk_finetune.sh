@@ -1,20 +1,31 @@
 #!/bin/bash
 #
-# SLERP vs top-k LERP — finetuning from a pretrained base MDLM checkpoint.
+# SLERP vs top-k LERP — finetuning from the RELEASED base MDLM (OpenWebText).
 #
-# WHY FINETUNING INSTEAD OF SCRATCH
-# ----------------------------------
+# WHY FINETUNING FROM A PRETRAINED BACKBONE
+# ------------------------------------------
 # Training from scratch hits a cold-start trap: the random backbone produces
 # near-uniform Pass-1 logits (neg_entropy ≈ −3.3), so soft-masked inputs are
 # pure noise. The gradient correctly pushes scale DOWN from 0.5 to ~0.25,
 # lambda stabilises at 0.01–0.04, and at that mixing weight the geometric
 # difference between SLERP's great-circle path and LERP's straight-line blend
-# is O(λ²) ≈ 0. Both methods reduce to vanilla MDLM.
+# is O(λ²) ≈ 0. Both methods reduce to vanilla MDLM and the metrics overlap.
 #
-# With a pretrained backbone, Pass-1 predictions are immediately confident.
-# The gradient pushes scale UP (not down), lambda reaches 0.2–0.5 where
-# the arc path and linear path produce visibly different embeddings, and
-# SLERP/LERP val/bpd curves should separate within the first 500 steps.
+# Starting from a strong pretrained backbone removes the cold start: Pass-1
+# predictions are immediately confident (neg_entropy near 0), so with the
+# init_centre/init_scale below lambda activates at ≈0.3 from step 0 and the
+# gradient can push scale UP. At lambda 0.2–0.5 the arc path and the linear
+# path produce visibly different embeddings, and SLERP/LERP val/bpd curves
+# should separate.
+#
+# WHICH CHECKPOINT
+# ----------------
+# Use the released binary MDLM (OpenWebText) referenced in language/README.md:
+#   https://drive.google.com/drive/folders/16LuuptK7Xfk-vzhQYZBZ0SA-B-BFluau
+# Download it, then point BASE_CKPT at the .ckpt file. This is the SAME
+# checkpoint that the repo's own continuation recipe (01_sm_pretraining_cont_owt.sh)
+# loads. It is a GPT-2-BPE small DiT, so this experiment runs on
+# model=small + data=openwebtext-split (NOT the tiny/text8 setup of 06/07).
 #
 # HOW finetune_path WORKS (main.py:162–177)
 # ------------------------------------------
@@ -24,43 +35,49 @@
 #   → backbone weights loaded from checkpoint ✓
 #   → tran_head.* absent in ckpt  → retains init_scale / init_centre below ✓
 #
-# HYPERPARAMETER DIFFERENCES FROM SCRIPT 07 (scratch)
-# -----------------------------------------------------
-#   optim.lr              3e-4  → 3e-5   (10× lower to prevent catastrophic forgetting)
-#   optim.tran_head_lr    0.01  → 0.01   (kept high; tran_head starts fresh)
-#   lr_scheduler.num_warmup_steps  2500 → 200  (backbone already trained)
-#   trainer.max_steps     5000  → 3000   (convergence faster with pretrained backbone)
-#   trainer.val_check_interval 500 → 200 (catch early divergence)
-#   optim.sm_prob          0.8  → 0.5    (gentler start; protect pretrained backbone)
-#   algo.tran_head.init_scale  0.5 → 0.3 (σ'(logit(0.3))≈0.21; healthy gradient)
-#   checkpointing.resume_from_ckpt true → false (prevent accidental old-ckpt resume)
+# RECIPE
+# ------
+# Mirrors 01_sm_pretraining_cont_owt.sh (the repo's validated continuation
+# recipe: model=small, data=openwebtext-split, sm_prob=0.8, tran_head_lr=0.01,
+# find_unused_parameters=True, sampling.predictor=sm) and layers on:
+#   - the A/B over transparency_alg (top-k LERP vs slerp_sm)
+#   - the lambda-activation fix that the from-scratch runs needed:
+#       algo.tran_head.init_scale=0.3   (σ'(logit(0.3))≈0.21; healthy gradient,
+#                                        vs config default 0.0 → scale≈1e-6)
+#       algo.tran_head.init_centre=-2.5 (activates at ~30% top-1 conf, vs the
+#                                        config default -0.75 which needs >85%)
+#   - checkpointing.resume_from_ckpt=false so a stale best.ckpt in the run dir
+#     cannot silently override training.finetune_path
+#   - a short warmup (backbone is already trained)
+# Same seed for both runs ⇒ identical init + data order ⇒ directly comparable.
 #
 # GPU REQUIREMENT
 # ---------------
-# Same as scripts 06/07: at least one visible GPU required.
+# Same as scripts 06/07: at least one visible GPU required (dataloader.py asserts
+# global_batch_size == batch_size * num_nodes * device_count * accum).
 #
 # Usage:
-#   BASE_CKPT=outputs/base_pretrain_tiny_text8_seed1/checkpoints/best.ckpt \
-#   SEED=1 MAX_STEPS=3000 bash scripts/09_slerp_vs_topk_finetune.sh
+#   BASE_CKPT=/path/to/mdlm.ckpt SEED=1 MAX_STEPS=5000 \
+#     bash scripts/09_slerp_vs_topk_finetune.sh
 #
 # Knobs (env vars, with defaults):
 SEED="${SEED:-1}"
-MAX_STEPS="${MAX_STEPS:-3000}"
-MODEL="${MODEL:-tiny}"
-DATA="${DATA:-text8}"
+MAX_STEPS="${MAX_STEPS:-5000}"
+MODEL="${MODEL:-small}"                  # small matches the released OWT backbone
+DATA="${DATA:-openwebtext-split}"
 DATA_CACHE_DIR="${DATA_CACHE_DIR:-./data_cache}"
-BATCH_SIZE="${BATCH_SIZE:-64}"
+BATCH_SIZE="${BATCH_SIZE:-32}"           # per-GPU micro-batch (matches script 01)
 BASE_CKPT="${BASE_CKPT:-}"
 
 set -euo pipefail
 
-# Preflight: require BASE_CKPT.
+# Preflight: require BASE_CKPT (the released binary MDLM checkpoint).
 if [[ -z "$BASE_CKPT" ]]; then
   echo ""
   echo "[preflight] BASE_CKPT is not set."
-  echo "Run script 08 first, then pass its output checkpoint, e.g.:"
-  echo "  BASE_CKPT=outputs/base_pretrain_tiny_text8_seed1/checkpoints/best.ckpt \\"
-  echo "  bash scripts/09_slerp_vs_topk_finetune.sh"
+  echo "Download the released binary MDLM (OpenWebText) from the Google Drive"
+  echo "folder linked in language/README.md, then pass its path, e.g.:"
+  echo "  BASE_CKPT=/path/to/mdlm.ckpt bash scripts/09_slerp_vs_topk_finetune.sh"
   exit 1
 fi
 
@@ -96,24 +113,25 @@ COMMON=(
   loader.batch_size="$BATCH_SIZE"
   loader.eval_batch_size="$BATCH_SIZE"
   trainer.max_steps="$MAX_STEPS"
-  trainer.val_check_interval=200
+  trainer.val_check_interval=500
   trainer.log_every_n_steps=50
-  # Backbone LR 10× lower than scratch to prevent catastrophic forgetting.
-  optim.lr=3e-5
   optim.tran_head_lr=0.01
-  optim.sm_prob=0.5
-  # Backbone already trained; short warmup is enough.
+  optim.sm_prob=0.8
+  # Backbone already trained; minimal warmup needed.
   lr_scheduler.num_warmup_steps=200
   sampling.predictor=sm
   strategy.find_unused_parameters=True
+  # OWT generative PPL eval is expensive and irrelevant to this A/B (matches 01).
+  eval.compute_generative_perplexity=False
   algo.tran_head.mixinputs_k=3
-  # Gentler init_scale than script 07 scratch (0.5→0.3); healthy gradient
-  # without risking disruption to the pretrained backbone early on.
+  # --- lambda-activation fix (same rationale as scripts 07): without this the
+  # config defaults (init_scale=0.0 → scale≈1e-6, init_centre=-0.75) drive
+  # lambda to ~0 and both methods collapse to vanilla MDLM. ---
   algo.tran_head.init_scale=0.3
   algo.tran_head.init_centre=-2.5
   # Load pretrained backbone weights; tran_head keeps fresh init (strict=False).
   training.finetune_path="$BASE_CKPT"
-  # Prevent accidentally resuming from a stale best.ckpt in the output dir.
+  # Prevent a stale best.ckpt in the run dir from overriding finetune_path.
   checkpointing.resume_from_ckpt=false
   wandb.group="$GROUP"
 )
