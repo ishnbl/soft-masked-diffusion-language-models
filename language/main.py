@@ -166,7 +166,9 @@ def _train(diffusion_model, config, logger, tokenizer):
     model = diffusion_model(config, tokenizer=valid_ds.tokenizer)
 
     # Load the state dictionary from the old checkpoint file.
-    old_checkpoint = torch.load(config.training.finetune_path, map_location="cpu")
+    # weights_only=False is required: Lightning checkpoints are pickled Python
+    # dicts, not pure-tensor files. Only load checkpoints from trusted sources.
+    old_checkpoint = torch.load(config.training.finetune_path, map_location="cpu", weights_only=False)
     
     old_state_dict = old_checkpoint['state_dict']
 

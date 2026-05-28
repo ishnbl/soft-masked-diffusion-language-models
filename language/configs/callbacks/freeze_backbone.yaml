@@ -1,0 +1,3 @@
+freeze_backbone:
+  _target_: callbacks.FreezeBackboneCallback
+  freeze_until_step: 1000

@@ -41,7 +41,9 @@ def parse_args():
 
 def load_embeddings(ckpt_path: str) -> torch.Tensor:
     print(f"Loading checkpoint: {ckpt_path}")
-    ckpt = torch.load(ckpt_path, map_location="cpu")
+    # weights_only=False is required: Lightning checkpoints are pickled Python
+    # dicts, not pure-tensor files. Only load checkpoints from trusted sources.
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
     if "state_dict" not in ckpt:
         sys.exit(

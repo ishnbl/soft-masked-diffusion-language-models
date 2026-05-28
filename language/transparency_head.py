@@ -126,6 +126,7 @@ class TransparencyHead(nn.Module):
         # Realized interpolation stats from the most recent forward (for logging
         # only; plain attrs so they never enter state_dict / EMA).
         self.last_lambda_mean = None
+        self.last_lambda_std = None
         self.last_slerp_angle_mean = None
 
     @property
@@ -180,9 +181,12 @@ class TransparencyHead(nn.Module):
         lambda_tensor = lambda_tensor.unsqueeze(-1)  # (B, T, 1)
         lambda_tensor[~mask_positions] = 0.0
 
-        # Stash the realized mean lambda over masked positions (live logging).
+        # Stash the realized mean / std of lambda over masked positions (live logging).
         if mask_positions.any():
-            self.last_lambda_mean = lambda_tensor.squeeze(-1)[mask_positions].mean().detach()
+            masked_lambdas = lambda_tensor.squeeze(-1)[mask_positions]
+            self.last_lambda_mean = masked_lambdas.mean().detach()
+            # unbiased=False so a single masked position still yields std=0 instead of NaN
+            self.last_lambda_std = masked_lambdas.std(unbiased=False).detach()
 
         if self.transparency_alg == "slerp_sm":
             # Spherical feedback in embedding space; returns inputs_embeds (B,T,D).

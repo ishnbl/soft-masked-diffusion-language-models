@@ -161,6 +161,8 @@ class MDLM_SM(MDLM):
       # Log the realized interpolation behavior (set during the head's forward).
       if self.tran_head.last_lambda_mean is not None:
           self.log('transparency/lambda_mean', self.tran_head.last_lambda_mean.item(), on_step=True, on_epoch=False, sync_dist=True)
+      if self.tran_head.last_lambda_std is not None:
+          self.log('transparency/lambda_std', self.tran_head.last_lambda_std.item(), on_step=True, on_epoch=False, sync_dist=True)
       if self.tran_head.last_slerp_angle_mean is not None:
           self.log('transparency/slerp_angle_mean', self.tran_head.last_slerp_angle_mean.item(), on_step=True, on_epoch=False, sync_dist=True)
 
