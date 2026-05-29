@@ -113,7 +113,7 @@ app = modal.App("slerp-vs-topk-finetune")
 
 @app.function(
     image=image,
-    gpu="A100",
+    gpu="L40S",
     timeout=7 * 3600,        # 7 h — generous for 5k steps
     volumes={
         CKPT_DIR: ckpt_volume,
@@ -158,6 +158,25 @@ def train(
     else:
         print("[setup] DUO files present — skipping setup.sh")
 
+    # ── validate cached dataset dirs ──────────────────────────────────────────
+    # A previous crashed run can leave a .dat directory that exists but has
+    # incomplete Arrow files. fsspec_exists() returns True, load_from_disk()
+    # then raises FileNotFoundError. Detect and remove these before training.
+    import datasets as hf_datasets
+    owt_cache = f"{DATA_DIR}/owt_cache"
+    for dat_name in [
+        f"{data.replace('-split', '-train')}_train_bs1024_wrapped.dat",
+        f"{data.replace('-split', '-valid')}_valid_bs1024_wrapped.dat",
+    ]:
+        dat_path = os.path.join(owt_cache, dat_name)
+        if os.path.exists(dat_path):
+            try:
+                hf_datasets.load_from_disk(dat_path)
+                print(f"[cache] Valid: {dat_path}")
+            except Exception as e:
+                print(f"[cache] Corrupted ({e}) — removing: {dat_path}")
+                shutil.rmtree(dat_path, ignore_errors=True)
+
     # ── build the hydra command ───────────────────────────────────────────────
     alg_tag = "topk" if transparency_alg == "mixinputs_with_topk" else "slerp"
     group    = f"slerp_vs_topk_v2_{model}_{data}_seed{seed}"
@@ -171,8 +190,9 @@ def train(
         f"data={data}",
         f"data.cache_dir={DATA_DIR}/owt_cache",
         f"seed={seed}",
-        "loader.batch_size=32",
-        "loader.eval_batch_size=32",
+        "loader.batch_size=16",       # L40S: batch=32 OOMs; batch=24 fails divisibility (512%24!=0); batch=16 is largest safe divisor
+        "loader.eval_batch_size=16",  # accumulate_grad_batches=32, global batch stays exactly 512
+        "loader.num_workers=2",       # default (sched_getaffinity=17) deadlocks in Modal containers
         f"trainer.max_steps={max_steps}",
         "trainer.val_check_interval=200",
         "trainer.log_every_n_steps=50",
@@ -183,6 +203,7 @@ def train(
         "sampling.predictor=sm",
         "strategy.find_unused_parameters=True",
         "eval.compute_generative_perplexity=False",
+        "eval.generate_samples=False",  # sample generation OOMs on A100-40GB (6 GB for [batch,seq,vocab] Gumbel tensor)
         "algo.tran_head.mixinputs_k=3",
         "algo.tran_head.init_scale=0.5",
         "algo.tran_head.init_centre=-2.5",
@@ -206,12 +227,19 @@ def train(
 
     print(f"[train] Starting: {run_name}")
     print(f"[train] Output dir: {out_dir}")
+    # expandable_segments avoids fragmentation OOMs: PyTorch reserves ~21 GB of
+    # freed memory in small chunks; without this flag it can't satisfy a
+    # contiguous 6 GB alloc even though total free > 6 GB.
+    env = os.environ.copy()
+    env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
     try:
-        subprocess.run(cmd, check=True, cwd=work_dir)
+        subprocess.run(cmd, check=True, cwd=work_dir, env=env)
     finally:
-        # Persist outputs even on crash so partial logs/checkpoints survive
-        out_volume.commit()
+        # data first — persists the tokenized .dat files so next run skips
+        # the 30-min OWT download+tokenize phase.
         data_volume.commit()
+        # then outputs — checkpoints and logs.
+        out_volume.commit()
     print(f"[train] Done. Outputs saved to volume at {out_dir}")
 
 
