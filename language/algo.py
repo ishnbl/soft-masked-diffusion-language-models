@@ -95,6 +95,9 @@ class MDLM_SM(MDLM):
       # Initialize transparency head for soft feedback
       self.tran_head = TransparencyHead(mask_token_id = self.mask_index, 
                                 trans_args = config.algo.tran_head)
+      if not self.tran_head.learnable:
+          for param in self.tran_head.parameters():
+              param.requires_grad = False
 
   def _eval_mode(self):
       self.tran_head.eval()
@@ -121,10 +124,11 @@ class MDLM_SM(MDLM):
               main_params.append(param)
 
       # Create the parameter groups with different learning rates
-      param_groups = [
-          {'params': main_params, 'lr': self.config.optim.lr},
-          {'params': special_lr_params, 'lr': self.config.optim.tran_head_lr}
-      ]
+      param_groups = []
+      if main_params:
+          param_groups.append({'params': main_params, 'lr': self.config.optim.lr})
+      if special_lr_params:
+          param_groups.append({'params': special_lr_params, 'lr': self.config.optim.tran_head_lr})
 
       # Instantiate the optimizer with the parameter groups
       optimizer = torch.optim.AdamW(

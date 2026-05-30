@@ -136,6 +136,9 @@ def train(
     batch_size: int = 16,
     num_workers: int = 4,
     val_check_interval: int = 200,
+    checkpoint_every_n_steps: int = 100,
+    freeze_transparency_head: bool = False,
+    fixed_lambda: float = -1.0,
     log_every_n_steps: int = 3,
 ):
     import subprocess
@@ -197,6 +200,10 @@ def train(
             f"global_batch_size ({global_batch_size}) must be divisible by "
             f"batch_size ({batch_size}) for this single-GPU launcher."
         )
+    if fixed_lambda >= 0.0 and not 0.0 <= fixed_lambda <= 1.0:
+        raise ValueError(
+            f"fixed_lambda must lie in [0, 1] when set, got {fixed_lambda}"
+        )
     accumulate_grad_batches = global_batch_size // batch_size
     val_check_interval_batches = val_check_interval * accumulate_grad_batches
 
@@ -240,8 +247,10 @@ def train(
         "algo.tran_head.mixinputs_k=3",
         "algo.tran_head.init_scale=0.5",
         "algo.tran_head.init_centre=-3.5",
+        f"algo.tran_head.learnable={str(not freeze_transparency_head).lower()}",
         f"training.finetune_path={base_ckpt}",
         "checkpointing.resume_from_ckpt=false",
+        f"callbacks.checkpoint_every_n_steps.every_n_train_steps={checkpoint_every_n_steps}",
         f"wandb.group={group}",
         f"algo.tran_head.transparency_alg={transparency_alg}",
         f"wandb.name={run_name}",
@@ -251,6 +260,8 @@ def train(
 
     if transparency_alg == "slerp_sm":
         cmd.append(f"algo.tran_head.slerp_n_iter={slerp_n_iter}")
+    if fixed_lambda >= 0.0:
+        cmd.append(f"algo.tran_head.fixed_lambda={fixed_lambda}")
 
     if freeze_until > 0:
         cmd += [
@@ -267,6 +278,10 @@ def train(
         f"val_check_interval={val_check_interval} global steps "
         f"({val_check_interval_batches} train batches)"
     )
+    print(f"[train] Checkpoint cadence: every {checkpoint_every_n_steps} global steps")
+    print(f"[train] Transparency head learnable: {not freeze_transparency_head}")
+    if fixed_lambda >= 0.0:
+        print(f"[train] Fixed lambda override: {fixed_lambda}")
     # expandable_segments avoids fragmentation OOMs: PyTorch reserves ~21 GB of
     # freed memory in small chunks; without this flag it can't satisfy a
     # contiguous 6 GB alloc even though total free > 6 GB.
@@ -301,6 +316,9 @@ def main(
     batch_size: int = 16,
     num_workers: int = 4,
     val_check_interval: int = 200,
+    checkpoint_every_n_steps: int = 100,
+    freeze_transparency_head: bool = False,
+    fixed_lambda: float = -1.0,
     log_every_n_steps: int = 10,
 ):
     kwargs = dict(
@@ -315,6 +333,9 @@ def main(
         batch_size=batch_size,
         num_workers=num_workers,
         val_check_interval=val_check_interval,
+        checkpoint_every_n_steps=checkpoint_every_n_steps,
+        freeze_transparency_head=freeze_transparency_head,
+        fixed_lambda=fixed_lambda,
         log_every_n_steps=log_every_n_steps,
     )
 

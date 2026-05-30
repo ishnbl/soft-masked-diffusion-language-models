@@ -133,6 +133,7 @@ COMMON=(
   training.finetune_path="$BASE_CKPT"
   # Prevent a stale best.ckpt in the run dir from overriding finetune_path.
   checkpointing.resume_from_ckpt=false
+  callbacks.checkpoint_every_n_steps.every_n_train_steps=100
   wandb.group="$GROUP"
 )
 

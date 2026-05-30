@@ -128,6 +128,14 @@ class TransparencyHead(nn.Module):
         self.mixinputs_k = getattr(trans_args, "mixinputs_k", 3)
         self.transparency_alg = getattr(trans_args, "transparency_alg", "mixinputs_with_topk")
         self.slerp_n_iter = getattr(trans_args, "slerp_n_iter", 3)
+        self.learnable = getattr(trans_args, "learnable", True)
+        self.fixed_lambda = getattr(trans_args, "fixed_lambda", None)
+        if self.fixed_lambda is not None:
+            self.fixed_lambda = float(self.fixed_lambda)
+            if not 0.0 <= self.fixed_lambda <= 1.0:
+                raise ValueError(
+                    f"fixed_lambda must lie in [0, 1], got {self.fixed_lambda}"
+                )
 
         self.epsilon = 1e-6
 
@@ -165,6 +173,15 @@ class TransparencyHead(nn.Module):
 
     def calculate_lambda_tensor(self, neg_entropy, mask_positions):
         """Calculate lambda tensor from negative entropy"""
+        if self.fixed_lambda is not None:
+            lambda_tensor = torch.full_like(
+                mask_positions,
+                fill_value=self.fixed_lambda,
+                dtype=torch.float32).to(dtype=self.raw_scale.dtype)
+            lambda_tensor = torch.where(mask_positions, lambda_tensor,
+                                        torch.zeros_like(lambda_tensor))
+            return lambda_tensor
+
         if neg_entropy is None or self.scale is None:
             return None
         
@@ -273,4 +290,3 @@ class TransparencyHead(nn.Module):
         
         # Return the components, not the full tensor
         return topk_indices, topk_probs.to(logits.dtype)
-
