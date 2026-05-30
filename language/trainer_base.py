@@ -249,6 +249,16 @@ class TrainerBase(L.LightningModule):
                         train_mode=True)
     self.metrics.update_train(losses.nlls, losses.prior_loss,
                               losses.num_tokens)
+
+    # Surface the running train metrics on every optimizer step so they appear
+    # alongside the transparency-head logs in W&B.
+    for k, v in self.metrics.train_nlls.items():
+      self.log(name=k,
+               value=v.compute(),
+               on_step=True,
+               on_epoch=False,
+               sync_dist=True)
+
     self.log(name='trainer/loss',
              value=losses.loss.item(),
              on_step=True,

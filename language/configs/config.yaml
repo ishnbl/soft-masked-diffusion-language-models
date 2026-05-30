@@ -92,7 +92,8 @@ wandb:
   group: null
   job_type: null
   name: null
-  id: ${.name}_${seed}
+  id: null
+  resume: never
   tags:
     - ${noise.type}
     - ${data.train}

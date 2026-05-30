@@ -51,7 +51,7 @@ Expected output progression:
 2. `[setup] DUO files missing — running setup.sh ...` (first time only, ~10s)
 3. `[cache] Valid: /vol/data/owt_cache/openwebtext-train_train_bs1024_wrapped.dat` (after first run)
    OR `Generating new data at: ...` → `Tokenizing ... 100%` (first ever run, ~30 min)
-4. `Sanity Checking` → `Training: 0%` → runs 100 steps
+4. `Training: 0%` → runs 100 steps
 5. `[train] Done.`
 
 ### Full A/B run — parallel (recommended)
@@ -70,6 +70,13 @@ modal run --detach run_modal.py
 ```bash
 modal run --detach run_modal.py --alg topk
 modal run --detach run_modal.py --alg slerp
+```
+
+### Faster debug loop
+Keep the same microbatch but shrink the effective batch so optimizer steps land
+4x sooner:
+```bash
+modal run run_modal.py --alg topk --max-steps 100 --global-batch-size 128
 ```
 
 ### Recovery variant (if lambda collapses to 0 in W&B)
@@ -111,7 +118,7 @@ Runs: `topk-ft-v2-small-openwebtext-split-seed1` and `slerp-ft-v2-small-openwebt
 | Event | After launch |
 |---|---|
 | Run cards appear in W&B | ~2 min |
-| First train metrics (loss, lr, lambda_mean, lambda_std) | ~1.5–2h (step 50 × 32 grad accum + warmup) |
+| First train metrics (loss, lr, lambda_mean, lambda_std) | much sooner now that logs emit every 10 optimizer steps and sanity validation is skipped |
 | First val/bpd | ~6–8h (step 200 × 32 grad accum) |
 
 ---

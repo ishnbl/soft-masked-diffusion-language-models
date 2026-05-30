@@ -73,8 +73,12 @@ def slerp_sm_feedback(input_ids, logits, embedding_matrix, mask_token_id,
     vhat = F.normalize(E[topk_indices], dim=-1, eps=eps)       # (B, T, k, D)
     mu = frechet_mean_sphere(vhat, pi, n_iter, eps)            # (B, T, D)
 
-    # Normalised mask embedding m_hat.
-    mhat = F.normalize(E[mask_token_id], dim=-1, eps=eps)      # (D,)
+    # Normalised mask embedding m_hat. Keep the original mask-token norm so we
+    # can rescale the unit-sphere SLERP result back to the embedding scale the
+    # backbone was trained on (otherwise norm-1 inputs are out of distribution).
+    mask_emb = E[mask_token_id]                                # (D,)
+    mask_norm = mask_emb.norm()                                # scalar
+    mhat = F.normalize(mask_emb, dim=-1, eps=eps)              # (D,)
     mhat = mhat.expand_as(mu)                                  # (B, T, D)
 
     # SLERP(m_hat, mu*, lambda).
@@ -87,6 +91,10 @@ def slerp_sm_feedback(input_ids, logits, embedding_matrix, mask_token_id,
     slerp = coeff_m * mhat + coeff_mu * mu                     # (B, T, D)
     # When mask and mean are ~identical the SLERP is undefined -> return m_hat.
     slerp = torch.where(omega < eps, mhat, slerp)
+    # The SLERP lives on the unit hypersphere (norm 1). Rescale back to the
+    # original mask-token norm so the embeddings stay in the backbone's
+    # training distribution rather than collapsing onto the unit sphere.
+    slerp = slerp * mask_norm                                  # (B, T, D)
 
     # Unmasked positions are returned unchanged (their own token embedding).
     mask_positions = (input_ids == mask_token_id).unsqueeze(-1)       # (B, T, 1)
