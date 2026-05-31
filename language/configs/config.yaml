@@ -67,6 +67,12 @@ optim:
   lr: 3e-4
   tran_head_lr: 1e-3
   sm_prob: 0.5
+  # Soft-masking is only applied for timesteps inside [sm_t_min, sm_t_max],
+  # matching the original soft-masking paper (feedback is skipped near t=0,
+  # where the input is already clean, and near t=1, where it is uninformative).
+  # Set sm_t_min=0.0 and sm_t_max=1.0 to recover the old "all timesteps" behavior.
+  sm_t_min: 0.2
+  sm_t_max: 0.8
   beta1: 0.9
   beta2: 0.999
   eps: 1e-8

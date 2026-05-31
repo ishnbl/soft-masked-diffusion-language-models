@@ -205,7 +205,6 @@ def train(
             f"fixed_lambda must lie in [0, 1] when set, got {fixed_lambda}"
         )
     accumulate_grad_batches = global_batch_size // batch_size
-    val_check_interval_batches = val_check_interval * accumulate_grad_batches
 
     cmd = [
         sys.executable,
@@ -230,14 +229,18 @@ def train(
         # Skip the extra validation warmup pass; on OWT it adds a lot of wall time
         # before the first real training step.
         "trainer.num_sanity_val_steps=0",
-        # Lightning counts val_check_interval in training batches here, so map
-        # the user-facing "global steps" knob onto dataloader batches.
-        f"trainer.val_check_interval={val_check_interval_batches}",
+        # Disable mid-training validation entirely: no validation loop runs
+        # between training steps (limit_val_batches=0 turns the val loop off, so
+        # val_check_interval is irrelevant).
+        "trainer.limit_val_batches=0",
         # Show progress sooner. With grad accumulation each logged "step" is expensive.
         f"trainer.log_every_n_steps={log_every_n_steps}",
         "optim.lr=3e-5",
         "optim.tran_head_lr=0.01",
         "optim.sm_prob=0.8",
+        # Soft-masking time band (original soft-masking paper): t in [0.2, 0.8].
+        "optim.sm_t_min=0.2",
+        "optim.sm_t_max=0.8",
         "lr_scheduler.num_warmup_steps=200",
         "sampling.predictor=sm",
         "strategy.find_unused_parameters=True",
@@ -275,8 +278,7 @@ def train(
         "[train] Effective schedule: "
         f"global_batch_size={global_batch_size}, batch_size={batch_size}, "
         f"accumulate_grad_batches={accumulate_grad_batches}, "
-        f"val_check_interval={val_check_interval} global steps "
-        f"({val_check_interval_batches} train batches)"
+        f"mid-training validation disabled (limit_val_batches=0)"
     )
     print(f"[train] Checkpoint cadence: every {checkpoint_every_n_steps} global steps")
     print(f"[train] Transparency head learnable: {not freeze_transparency_head}")

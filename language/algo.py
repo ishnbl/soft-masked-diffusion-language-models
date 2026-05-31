@@ -222,16 +222,31 @@ class MDLM_SM(MDLM):
 
     xt = self.q_xt(x0, alpha_t)
 
-    use_soft_mask = not train_mode or (torch.rand(1).item() < self.config.optim.sm_prob)
+    # Bernoulli gate (training only): soft-masking is applied with probability
+    # sm_prob. At eval it is always considered.
+    sm_gate = (not train_mode) or (torch.rand(1).item() < self.config.optim.sm_prob)
+    # Time-band gate: per the original soft-masking paper, only apply soft-masking
+    # for timesteps inside [sm_t_min, sm_t_max]. `t` is per-sample (shape [B]).
+    in_band = (t >= self.config.optim.sm_t_min) & (t <= self.config.optim.sm_t_max)
+    use_soft_mask = sm_gate and bool(in_band.any())
 
-    if use_soft_mask:
-        # Pass 1: Get predictions for feedback. Block gradients
+    if use_soft_mask and bool(in_band.all()):
+        # Every sample is in-band: original two-pass soft-mask path.
+        # Pass 1: Get predictions for feedback. Block gradients.
         log_x_theta_pass1 = self.forward(xt, sigma=sigma).detach()
-
         # Pass 2: Main pass that computes the gradients.
         log_x_theta = self.forward(xt, sigma=sigma, log_p_x0=log_x_theta_pass1)
+    elif use_soft_mask:
+        # Mixed batch: soft-mask only the in-band samples, standard
+        # (gradient-carrying) pass for the rest. The standard pass doubles as the
+        # detached feedback for the soft-mask pass, so this stays at two forwards.
+        log_x_theta_std = self.forward(xt, sigma=sigma)
+        log_x_theta_sm = self.forward(
+            xt, sigma=sigma, log_p_x0=log_x_theta_std.detach())
+        sel = in_band.view(-1, *([1] * (log_x_theta_sm.ndim - 1)))
+        log_x_theta = torch.where(sel, log_x_theta_sm, log_x_theta_std)
     else:
-        # --- Standard Path ---
+        # --- Standard Path (gate off, or no sample falls in the band) ---
         log_x_theta = self.forward(xt, sigma=sigma)
 
     utils.print_nans(log_x_theta, 'model_output')
@@ -279,8 +294,15 @@ class MDLM_SM(MDLM):
             x = self._denoiser_update(x, t)
         else:
             unet_conditioning = self._sigma_from_alphat(self.noise(t)[1])
-            # Use the final feedback pass for noise removal
-            final_log_p_x0 = self.forward(x, unet_conditioning, log_p_x0=log_p_x0_cache_sm)
+            # Use the final feedback pass for noise removal, but only feed back the
+            # cached prediction when this final timestep is inside the soft-mask
+            # band. Noise removal runs at min_t (≈eps), which is normally below
+            # sm_t_min, so by default this is a standard forward.
+            nr_time = t.reshape(-1)[0].item()
+            nr_in_band = (self.config.optim.sm_t_min <= nr_time
+                          <= self.config.optim.sm_t_max)
+            final_feedback = log_p_x0_cache_sm if nr_in_band else None
+            final_log_p_x0 = self.forward(x, unet_conditioning, log_p_x0=final_feedback)
             x = final_log_p_x0.argmax(dim=-1)
     return x
 
@@ -297,7 +319,14 @@ class MDLM_SM(MDLM):
       move_chance_s = (t - dt)[:, None, None]
       assert move_chance_t.ndim == 3, move_chance_t.shape
       if p_x0 is None:
-        log_p_x0_sm = self.forward(x, sigma_t,log_p_x0_sm)
+        # Time-band gate: only feed the cached prediction back (soft-mask path)
+        # when the current timestep is inside [sm_t_min, sm_t_max]; otherwise run
+        # a standard forward, matching the original soft-masking paper.
+        time_val = t.reshape(-1)[0].item()
+        in_band = (self.config.optim.sm_t_min <= time_val
+                   <= self.config.optim.sm_t_max)
+        feedback = log_p_x0_sm if in_band else None
+        log_p_x0_sm = self.forward(x, sigma_t, feedback)
         p_x0 = log_p_x0_sm.exp()
         if self.config.sampling.p_nucleus < 1:
           sorted_probs, sorted_indices = torch.sort(p_x0, descending=True, dim=-1)
