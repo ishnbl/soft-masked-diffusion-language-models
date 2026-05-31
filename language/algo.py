@@ -225,28 +225,20 @@ class MDLM_SM(MDLM):
     # Bernoulli gate (training only): soft-masking is applied with probability
     # sm_prob. At eval it is always considered.
     sm_gate = (not train_mode) or (torch.rand(1).item() < self.config.optim.sm_prob)
-    # Time-band gate: per the original soft-masking paper, only apply soft-masking
-    # for timesteps inside [sm_t_min, sm_t_max]. `t` is per-sample (shape [B]).
-    in_band = (t >= self.config.optim.sm_t_min) & (t <= self.config.optim.sm_t_max)
-    use_soft_mask = sm_gate and bool(in_band.any())
+    # Time-band gate (batch level, matching the base repo's single whole-batch
+    # decision): only soft-mask when the batch's representative timestep falls
+    # inside [sm_t_min, sm_t_max], per the original soft-masking paper.
+    in_band = (self.config.optim.sm_t_min <= t.mean().item()
+               <= self.config.optim.sm_t_max)
+    use_soft_mask = sm_gate and in_band
 
-    if use_soft_mask and bool(in_band.all()):
-        # Every sample is in-band: original two-pass soft-mask path.
+    if use_soft_mask:
         # Pass 1: Get predictions for feedback. Block gradients.
         log_x_theta_pass1 = self.forward(xt, sigma=sigma).detach()
         # Pass 2: Main pass that computes the gradients.
         log_x_theta = self.forward(xt, sigma=sigma, log_p_x0=log_x_theta_pass1)
-    elif use_soft_mask:
-        # Mixed batch: soft-mask only the in-band samples, standard
-        # (gradient-carrying) pass for the rest. The standard pass doubles as the
-        # detached feedback for the soft-mask pass, so this stays at two forwards.
-        log_x_theta_std = self.forward(xt, sigma=sigma)
-        log_x_theta_sm = self.forward(
-            xt, sigma=sigma, log_p_x0=log_x_theta_std.detach())
-        sel = in_band.view(-1, *([1] * (log_x_theta_sm.ndim - 1)))
-        log_x_theta = torch.where(sel, log_x_theta_sm, log_x_theta_std)
     else:
-        # --- Standard Path (gate off, or no sample falls in the band) ---
+        # --- Standard Path (gate off, or batch is out of band) ---
         log_x_theta = self.forward(xt, sigma=sigma)
 
     utils.print_nans(log_x_theta, 'model_output')

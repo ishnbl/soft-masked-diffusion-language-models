@@ -50,41 +50,45 @@ plus the config and Modal launcher.
 
 ### 1. Training: `nll(...)`
 
-The single batch-level Bernoulli gate was replaced with a Bernoulli gate **plus**
-a per-sample time-band gate. `t` is sampled per-example (shape `[B]`), so a batch
-can contain a mix of in-band and out-of-band timesteps. Three cases:
+The base repo gates soft-masking with a single whole-batch Bernoulli coin flip
+(`sm_prob`), applied at every timestep. We keep that exact structure and simply
+**add the time-band condition to the same single decision** — i.e. a *batch-level*
+gate, not a per-sample one.
 
-| Case | Behavior | Forward passes |
-|------|----------|----------------|
-| Gate off, or **no** sample in band | Standard forward only | 1 |
-| Gate on, **all** samples in band | Original two-pass soft-mask (detached pass-1 feedback → pass-2) | 2 |
-| Gate on, **mixed** batch | Standard pass (gradient-carrying) for out-of-band samples; soft-mask pass for in-band samples, selected per-sample with `torch.where`. The standard pass doubles as the detached feedback for the soft-mask pass. | 2 |
+`t` is sampled per-example (shape `[B]`), so the band is evaluated on the batch's
+representative timestep `t.mean()`. The soft-mask path is taken only when the
+Bernoulli gate fires **and** the batch's mean `t` lies in `[sm_t_min, sm_t_max]`:
 
-Key points:
+| Case | Behavior |
+|------|----------|
+| Gate off, or batch out of band | Standard single forward. |
+| Gate on **and** batch in band | Original two-pass soft-mask (detached pass-1 feedback → gradient-carrying pass-2). |
 
-- The mixed case stays at **two** forward passes (no extra cost vs. the original)
-  because the gradient-carrying standard pass is reused (detached) as the
-  feedback input for the soft-mask pass.
-- Gradients still flow only through the loss-producing output for each sample:
-  pass-2 for in-band samples, the standard pass for out-of-band samples. The
-  soft-mask feedback input remains detached, exactly as before.
+This is single-path and has exactly the same memory/compute profile as the base
+repo's soft-mask step — there is no batch splitting, no `torch.where`, and no
+extra retained activation graph (an earlier per-sample version that combined two
+gradient-carrying full-batch forwards OOMed on a 40 GB A100, which is why the
+batch-level gate is used).
 
 ```python
 sm_gate = (not train_mode) or (torch.rand(1).item() < self.config.optim.sm_prob)
-in_band = (t >= self.config.optim.sm_t_min) & (t <= self.config.optim.sm_t_max)
-use_soft_mask = sm_gate and bool(in_band.any())
+in_band = (self.config.optim.sm_t_min <= t.mean().item()
+           <= self.config.optim.sm_t_max)
+use_soft_mask = sm_gate and in_band
 
-if use_soft_mask and bool(in_band.all()):
+if use_soft_mask:
     log_x_theta_pass1 = self.forward(xt, sigma=sigma).detach()
     log_x_theta = self.forward(xt, sigma=sigma, log_p_x0=log_x_theta_pass1)
-elif use_soft_mask:
-    log_x_theta_std = self.forward(xt, sigma=sigma)
-    log_x_theta_sm = self.forward(xt, sigma=sigma, log_p_x0=log_x_theta_std.detach())
-    sel = in_band.view(-1, *([1] * (log_x_theta_sm.ndim - 1)))
-    log_x_theta = torch.where(sel, log_x_theta_sm, log_x_theta_std)
 else:
     log_x_theta = self.forward(xt, sigma=sigma)
 ```
+
+> Trade-off: because the decision is whole-batch, a batch is either fully
+> soft-masked or not. Over training, batches are soft-masked roughly in
+> proportion to how often their mean `t` falls in-band, which matches how the
+> base repo already makes one soft-mask decision per batch. The sampling-side
+> gates below remain per-timestep (at inference all positions share one scalar
+> `t`, so there is no ambiguity there).
 
 ### 2. Sampling: `_ddpm_caching_update(...)`
 
