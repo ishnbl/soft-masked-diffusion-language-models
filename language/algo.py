@@ -233,8 +233,10 @@ class MDLM_SM(MDLM):
     use_soft_mask = sm_gate and in_band
 
     if use_soft_mask:
-        # Pass 1: Get predictions for feedback. Block gradients.
-        log_x_theta_pass1 = self.forward(xt, sigma=sigma).detach()
+        # Pass 1: Get predictions for feedback. No grad needed — avoids building
+        # the full backward graph for a forward whose output is only used as data.
+        with torch.no_grad():
+            log_x_theta_pass1 = self.forward(xt, sigma=sigma)
         # Pass 2: Main pass that computes the gradients.
         log_x_theta = self.forward(xt, sigma=sigma, log_p_x0=log_x_theta_pass1)
     else:
