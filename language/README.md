@@ -71,6 +71,27 @@ world size from `torch.cuda.device_count()` (not `trainer.devices`). To select *
 GPUs, set `CUDA_VISIBLE_DEVICES` yourself and the launcher will honor it
 (`CUDA_VISIBLE_DEVICES=1,3 bash scripts/run_slerp_multigpu.sh`).
 
+#### On Modal (multi-GPU)
+
+To test the multi-GPU `slerp_sm` path on [Modal](https://modal.com) (N GPUs in one
+container = N-way DDP on a single node), use `run_modal_multigpu.py`. It reuses the
+image / volumes / dataset-cache setup from `run_modal.py` and exercises the DDP-safe
+gate under real multi-process DDP.
+
+```bash
+pip install modal && modal setup
+modal secret create wandb-secret WANDB_API_KEY=<your-key>
+modal volume put mdlm-checkpoints /local/path/mdlm_owt.ckpt mdlm_owt.ckpt
+
+# quick 2-GPU smoke test (20 steps, small global batch so it finishes fast):
+modal run run_modal_multigpu.py --num-gpus 2 --gpu-type L40S \
+    --max-steps 20 --global-batch-size 64
+
+# full 4-GPU finetune:
+modal run run_modal_multigpu.py --num-gpus 4 --gpu-type A100 \
+    --max-steps 5000 --global-batch-size 512 --batch-size 32
+```
+
 ## 📊 Evaluation
 
 For unconstrained generation experiments, specify the checkpoint's location in the [evaluation script](./scripts/03_gen_ppl_owt_mdlm_sm.sh). For standard MDLM sampling `NFE` number of evaluations, run
