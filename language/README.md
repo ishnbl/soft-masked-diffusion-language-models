@@ -83,12 +83,13 @@ pip install modal && modal setup
 modal secret create wandb-secret WANDB_API_KEY=<your-key>
 modal volume put mdlm-checkpoints /local/path/mdlm_owt.ckpt mdlm_owt.ckpt
 
+# GPU count/type are set via NUM_GPUS / GPU_TYPE env vars (fixed at import time).
 # quick 2-GPU smoke test (20 steps, small global batch so it finishes fast):
-modal run run_modal_multigpu.py --num-gpus 2 --gpu-type L40S \
+NUM_GPUS=2 GPU_TYPE=L40S modal run run_modal_multigpu.py \
     --max-steps 20 --global-batch-size 64
 
 # full 4-GPU finetune:
-modal run run_modal_multigpu.py --num-gpus 4 --gpu-type A100 \
+NUM_GPUS=4 GPU_TYPE=A100 modal run run_modal_multigpu.py \
     --max-steps 5000 --global-batch-size 512 --batch-size 32
 ```
 

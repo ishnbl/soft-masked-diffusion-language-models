@@ -18,13 +18,17 @@ Setup (one-time, local) — same as run_modal.py:
   modal secret create wandb-secret WANDB_API_KEY=<your-key>
   modal volume put mdlm-checkpoints /local/path/mdlm_owt.ckpt mdlm_owt.ckpt
 
+GPU count/type are set via NUM_GPUS / GPU_TYPE env vars (they must be fixed at
+import time; this Modal version has no per-call gpu override). Everything else is
+a normal --flag.
+
 Quick 2-GPU smoke test (20 steps, small global batch so it finishes fast):
   cd language/
-  modal run run_modal_multigpu.py --num-gpus 2 --gpu-type L40S \
+  NUM_GPUS=2 GPU_TYPE=L40S modal run run_modal_multigpu.py \
       --max-steps 20 --global-batch-size 64
 
 Full 4-GPU finetune run:
-  modal run run_modal_multigpu.py --num-gpus 4 --gpu-type A100 \
+  NUM_GPUS=4 GPU_TYPE=A100 modal run run_modal_multigpu.py \
       --max-steps 5000 --global-batch-size 512 --batch-size 32
 
 Download outputs:
@@ -50,12 +54,18 @@ from run_modal import (
 
 app = modal.App("slerp-multigpu")
 
+# GPU allocation must be fixed at function-definition (import) time. Older Modal
+# has no per-call gpu override (Function.with_options), so the count/type are
+# read from env vars here instead of CLI flags. Set them before `modal run`:
+#   NUM_GPUS=4 GPU_TYPE=A100 modal run run_modal_multigpu.py --max-steps 5000 ...
+NUM_GPUS = int(os.environ.get("NUM_GPUS", "2"))
+GPU_TYPE = os.environ.get("GPU_TYPE", "L40S")  # L40S | A100 | A100-80GB | H100 ...
+GPU_SPEC = f"{GPU_TYPE}:{NUM_GPUS}"
+
 
 @app.function(
     image=image,
-    # Default to 2 L40S; override per-run with `.with_options(gpu=...)` below so
-    # --num-gpus / --gpu-type from the CLI actually change the allocation.
-    gpu="L40S:2",
+    gpu=GPU_SPEC,
     timeout=7 * 3600,
     volumes={CKPT_DIR: ckpt_volume, DATA_DIR: data_volume, OUT_DIR: out_volume},
     secrets=[modal.Secret.from_name("wandb-secret")],
@@ -217,8 +227,6 @@ def train_mg(
 
 @app.local_entrypoint()
 def main(
-    num_gpus: int = 2,
-    gpu_type: str = "L40S",  # L40S | A100 | A100-80GB | H100 ...
     base_ckpt: str = "mdlm_owt.ckpt",
     seed: int = 1,
     max_steps: int = 5000,
@@ -231,13 +239,15 @@ def main(
     checkpoint_every_n_steps: int = 100,
     log_every_n_steps: int = 3,
 ):
-    # Override the static decorator GPU spec at call time so --num-gpus/--gpu-type
-    # actually change the allocation (e.g. "A100:4").
-    gpu_spec = f"{gpu_type}:{num_gpus}"
-    print(f"[local] Requesting gpu={gpu_spec} (single node, {num_gpus}-way DDP)")
-    train = train_mg.with_options(gpu=gpu_spec)
-    train.remote(
-        num_gpus=num_gpus,
+    # GPU count/type are fixed at import from NUM_GPUS / GPU_TYPE env vars
+    # (see the module-level GPU_SPEC), because this Modal version can't override
+    # the gpu allocation per call.
+    print(
+        f"[local] gpu={GPU_SPEC} (single node, {NUM_GPUS}-way DDP). "
+        f"Set NUM_GPUS / GPU_TYPE env vars to change this."
+    )
+    train_mg.remote(
+        num_gpus=NUM_GPUS,
         base_ckpt_filename=base_ckpt,
         seed=seed,
         max_steps=max_steps,
@@ -253,5 +263,5 @@ def main(
     print("\n[local] Run complete.")
     print(
         f"[local] Download outputs:  modal volume get mdlm-outputs "
-        f"{OUT_DIR}/slerp_mg_{num_gpus}gpu_{model}_{data}_seed{seed} ./local_outputs/"
+        f"{OUT_DIR}/slerp_mg_{NUM_GPUS}gpu_{model}_{data}_seed{seed} ./local_outputs/"
     )
