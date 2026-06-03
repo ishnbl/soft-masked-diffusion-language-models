@@ -47,21 +47,55 @@ RUN_DIR="${RUN_DIR:-}"
 
 set -euo pipefail
 
-# --- Resolve GPU count -------------------------------------------------------
-if [[ -z "$NUM_GPUS" ]]; then
-  NUM_GPUS="$(python -c 'import torch; print(torch.cuda.device_count())')"
+# --- Resolve GPU count + pin CUDA_VISIBLE_DEVICES ----------------------------
+# CRITICAL: this codebase derives the world size from `torch.cuda.device_count()`
+# (the Hydra `device_count:` resolver in main.py and the DUO dataloader's
+# `global == batch * device_count * accum` assertion), NOT from
+# `trainer.devices`. So if 4 GPUs are visible but we ask for NUM_GPUS=2, the
+# dataloader would expect a global batch of `per_gpu * 4 * accum` and the run
+# fails. We therefore make the visible device count *equal* NUM_GPUS by pinning
+# CUDA_VISIBLE_DEVICES before any Python (resolver, preflight, training) runs.
+#
+# If the caller already set CUDA_VISIBLE_DEVICES (e.g. to choose specific GPUs),
+# we respect it and derive NUM_GPUS from it instead of clobbering their choice.
+if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+  VISIBLE_N="$(awk -F, '{print NF}' <<<"$CUDA_VISIBLE_DEVICES")"
+  if [[ -n "$NUM_GPUS" && "$NUM_GPUS" != "$VISIBLE_N" ]]; then
+    echo "[preflight] CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} exposes ${VISIBLE_N} GPU(s)"
+    echo "            but NUM_GPUS=${NUM_GPUS}. Unset one of them (CUDA_VISIBLE_DEVICES"
+    echo "            wins if you want specific GPUs; NUM_GPUS if you want the first N)."
+    exit 1
+  fi
+  NUM_GPUS="$VISIBLE_N"
+  echo "[preflight] honoring caller CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} (${NUM_GPUS} GPU[s])"
+else
+  TOTAL_N="$(python -c 'import torch; print(torch.cuda.device_count())')"
+  if [[ -z "$NUM_GPUS" ]]; then
+    NUM_GPUS="$TOTAL_N"
+  fi
+  if (( NUM_GPUS < 1 )); then
+    echo "[preflight] No GPU visible to PyTorch. This path requires >=1 GPU."; exit 1
+  fi
+  if (( NUM_GPUS > TOTAL_N )); then
+    echo "[preflight] Requested NUM_GPUS=${NUM_GPUS} but only ${TOTAL_N} GPU(s) visible."; exit 1
+  fi
+  if (( NUM_GPUS < TOTAL_N )); then
+    # Pin to the first NUM_GPUS devices so device_count()==NUM_GPUS everywhere.
+    export CUDA_VISIBLE_DEVICES="$(seq -s, 0 $((NUM_GPUS - 1)))"
+    echo "[preflight] ${TOTAL_N} GPU(s) visible; pinning CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+  fi
 fi
 
-# --- Preflight: GPUs --------------------------------------------------------
+# Verify the process now sees exactly NUM_GPUS devices (keeps device_count(),
+# trainer.devices, and the derived ACCUM in lockstep).
 python - "$NUM_GPUS" <<'PY'
-import sys, torch
+import os, sys, torch
 want = int(sys.argv[1])
 have = torch.cuda.device_count()
-if have == 0:
-    sys.exit("\n[preflight] No GPU visible to PyTorch. This path requires >=1 GPU.\n")
-if want > have:
-    sys.exit(f"\n[preflight] Requested NUM_GPUS={want} but only {have} visible.\n")
-print(f"[preflight] launching on {want}/{have} visible GPU(s) — OK")
+if have != want:
+    sys.exit(f"\n[preflight] expected {want} visible GPU(s) but torch sees {have} "
+             f"(CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES','<unset>')}).\n")
+print(f"[preflight] {want} GPU(s) visible to this process — OK")
 PY
 
 # --- Preflight: global batch must divide cleanly -----------------------------

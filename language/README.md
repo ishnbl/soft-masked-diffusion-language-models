@@ -65,6 +65,12 @@ The soft-mask gate (Bernoulli `sm_prob` + time band) is decided **identically on
 rank** (step-seeded Bernoulli + globally-reduced `t` mean in `MDLM_SM.nll`), so all ranks
 take the same soft-mask branch each step and the DDP gradient all-reduce stays in sync.
 
+`NUM_GPUS` smaller than the number of visible GPUs is handled by pinning
+`CUDA_VISIBLE_DEVICES` to the first `NUM_GPUS` devices, because this codebase derives the
+world size from `torch.cuda.device_count()` (not `trainer.devices`). To select *specific*
+GPUs, set `CUDA_VISIBLE_DEVICES` yourself and the launcher will honor it
+(`CUDA_VISIBLE_DEVICES=1,3 bash scripts/run_slerp_multigpu.sh`).
+
 ## 📊 Evaluation
 
 For unconstrained generation experiments, specify the checkpoint's location in the [evaluation script](./scripts/03_gen_ppl_owt_mdlm_sm.sh). For standard MDLM sampling `NFE` number of evaluations, run
