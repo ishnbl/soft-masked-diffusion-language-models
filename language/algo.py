@@ -222,14 +222,38 @@ class MDLM_SM(MDLM):
 
     xt = self.q_xt(x0, alpha_t)
 
-    # Bernoulli gate (training only): soft-masking is applied with probability
-    # sm_prob. At eval it is always considered.
-    sm_gate = (not train_mode) or (torch.rand(1).item() < self.config.optim.sm_prob)
+    # --- DDP-safe soft-mask gate ---------------------------------------------
+    # Under data-parallel training every rank MUST take the same branch here:
+    # if some ranks exercise the tran_head sub-graph and others do not, the
+    # tran_head params receive gradients on a subset of ranks only and the DDP
+    # gradient all-reduce desyncs (wrong averaging, and hangs in stricter
+    # setups). The naive `torch.rand(1)` Bernoulli draw and the per-rank
+    # `t.mean()` band test both diverge across ranks, so we make both decisions
+    # rank-identical:
+    #   (1) Bernoulli gate seeded by the global step  -> same on every rank, no
+    #       communication needed.
+    #   (2) time-band test on the GLOBAL mean of t (all-reduced) instead of the
+    #       local per-rank chunk -> one cheap scalar all-reduce per step.
+    if train_mode:
+        gate_gen = torch.Generator()
+        gate_gen.manual_seed(int(self.config.seed) * 1_000_003
+                             + int(self.global_step))
+        sm_gate = (torch.rand(1, generator=gate_gen).item()
+                   < self.config.optim.sm_prob)
+    else:
+        sm_gate = True
+
     # Time-band gate (batch level, matching the base repo's single whole-batch
     # decision): only soft-mask when the batch's representative timestep falls
-    # inside [sm_t_min, sm_t_max], per the original soft-masking paper.
-    in_band = (self.config.optim.sm_t_min <= t.mean().item()
-               <= self.config.optim.sm_t_max)
+    # inside [sm_t_min, sm_t_max], per the original soft-masking paper. Reduce
+    # to a global mean so all ranks agree.
+    t_mean = t.mean()
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        t_mean = t_mean.clone()
+        torch.distributed.all_reduce(t_mean, op=torch.distributed.ReduceOp.SUM)
+        t_mean = t_mean / torch.distributed.get_world_size()
+    t_mean = t_mean.item()
+    in_band = (self.config.optim.sm_t_min <= t_mean <= self.config.optim.sm_t_max)
     use_soft_mask = sm_gate and in_band
 
     if use_soft_mask:
