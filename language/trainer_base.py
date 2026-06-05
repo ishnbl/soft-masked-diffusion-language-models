@@ -418,15 +418,20 @@ class Diffusion(TrainerBase):
       batch_dim = n
       n = self.config.loader.global_batch_size
     _eps_t = torch.rand(n, device=self.device)
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+      torch.distributed.broadcast(_eps_t, src=0)
     if self.antithetic_sampling:
       offset = torch.arange(n, device=self.device) / n
       _eps_t = (_eps_t / n + offset) % 1
     t = (1 - self.sampling_eps) * _eps_t + self.sampling_eps
     if accum_step is not None:
       t = t.chunk(self.trainer.num_nodes)[self.trainer.node_rank]
+      # Split by accum step first so each (step, rank) pair covers the same
+      # narrow t-band.  Splitting by device first would give rank 0 all low-t
+      # and rank 1 all high-t, making the all-reduced t_mean always ≈ 0.5 and
+      # the in_band check always True — soft-mask fires 80% of steps vs 50%.
+      t = t.chunk(self.trainer.accumulate_grad_batches)[accum_step]
       t = t.chunk(self.trainer.num_devices)[self.trainer.local_rank]
-      t = t.chunk(self.trainer.accumulate_grad_batches)[
-        accum_step]
       # corner case for the last datapoint
       t = t[:batch_dim]
     return t

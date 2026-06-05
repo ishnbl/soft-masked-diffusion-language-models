@@ -7,8 +7,9 @@ pathway under PyTorch-Lightning DDP across N GPUs *in a single Modal container*
 soft-mask gate added in algo.py (`MDLM_SM.nll`): step-seeded Bernoulli +
 globally all-reduced time band, so every rank takes the same soft-mask branch.
 
-It reuses run_modal.py's image / volumes / DUO-setup / dataset-cache hardening,
-and adds the multi-GPU wiring (N visible GPUs => device_count()==N==trainer.devices,
+It duplicates the image / volumes / path constants from run_modal.py (identical
+spec so Modal reuses cached image layers), and adds the multi-GPU wiring
+(N visible GPUs => device_count()==N==trainer.devices,
 so the world size, the `device_count:` resolver, and the derived
 accumulate_grad_batches all stay in lockstep).
 
@@ -25,11 +26,11 @@ a normal --flag.
 Quick 2-GPU smoke test (20 steps, small global batch so it finishes fast):
   cd language/
   NUM_GPUS=2 GPU_TYPE=L40S modal run run_modal_multigpu.py \
-      --max-steps 20 --global-batch-size 64
+      --max-steps 20 --global-batch-size 64 --batch-size 16
 
 Full 4-GPU finetune run:
   NUM_GPUS=4 GPU_TYPE=A100 modal run run_modal_multigpu.py \
-      --max-steps 5000 --global-batch-size 512 --batch-size 32
+      --max-steps 5000 --global-batch-size 512 --batch-size 16
 
 Download outputs:
   modal volume get mdlm-outputs <remote-path> <local-path>
@@ -40,16 +41,56 @@ import sys
 
 import modal
 
-# Reuse the proven image / volumes / path constants from the single-GPU runner.
-from run_modal import (
-    image,
-    ckpt_volume,
-    data_volume,
-    out_volume,
-    CKPT_DIR,
-    DATA_DIR,
-    OUT_DIR,
-    LANGUAGE_DIR,
+# ── volumes (persistent across runs) ─────────────────────────────────────────
+ckpt_volume = modal.Volume.from_name("mdlm-checkpoints", create_if_missing=True)
+data_volume = modal.Volume.from_name("mdlm-data", create_if_missing=True)
+out_volume = modal.Volume.from_name("mdlm-outputs", create_if_missing=True)
+
+CKPT_DIR = "/vol/checkpoints"
+DATA_DIR = "/vol/data"
+OUT_DIR = "/vol/outputs"
+LANGUAGE_DIR = "/workspace/language"
+
+# ── container image ───────────────────────────────────────────────────────────
+# Identical spec to run_modal.py so Modal reuses the cached image layers.
+image = (
+    modal.Image.debian_slim(python_version="3.12")
+    .apt_install("git", "curl", "patch", "git-lfs")
+    .pip_install(
+        "numpy<2",
+        "datasets==2.15.0",
+        "einops==0.7.0",
+        "fsspec==2023.10.0",
+        "h5py==3.10.0",
+        "hydra-core==1.3.2",
+        "lightning==2.2.1",
+        "omegaconf==2.3.0",
+        "packaging==23.2",
+        "pandas==2.2.1",
+        "rich==13.7.1",
+        "scikit-learn==1.4.0",
+        "transformers==4.38.2",
+        "torchmetrics==1.6.1",
+        "wandb",
+        "timm",
+        "huggingface-hub",
+        "hf_transfer",
+        "mauve-text",
+    )
+    .pip_install(
+        "torch==2.5.1",
+        "torchvision==0.20.1",
+        "torchaudio==2.5.1",
+        "triton==3.1.0",
+        extra_index_url="https://download.pytorch.org/whl/cu124",
+    )
+    .run_commands(
+        "pip install --no-deps "
+        "https://github.com/Dao-AILab/flash-attention/releases/download/"
+        "v2.7.4.post1/"
+        "flash_attn-2.7.4.post1+cu12torch2.5cxx11abiFALSE-cp312-cp312-linux_x86_64.whl"
+    )
+    .add_local_dir(".", remote_path=LANGUAGE_DIR, copy=True)
 )
 
 app = modal.App("slerp-multigpu")
@@ -79,7 +120,7 @@ def train_mg(
     data: str = "openwebtext-split",
     slerp_n_iter: int = 3,
     global_batch_size: int = 512,
-    batch_size: int = 32,
+    batch_size: int = 16,
     num_workers: int = 4,
     checkpoint_every_n_steps: int = 100,
     log_every_n_steps: int = 3,
@@ -234,7 +275,7 @@ def main(
     data: str = "openwebtext-split",
     slerp_n_iter: int = 3,
     global_batch_size: int = 512,
-    batch_size: int = 32,
+    batch_size: int = 16,
     num_workers: int = 4,
     checkpoint_every_n_steps: int = 100,
     log_every_n_steps: int = 3,

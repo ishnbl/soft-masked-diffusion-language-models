@@ -249,7 +249,7 @@ def train(
         "eval.generate_samples=False",
         "algo.tran_head.mixinputs_k=3",
         "algo.tran_head.init_scale=0.5",
-        "algo.tran_head.init_centre=-3.5",
+        "algo.tran_head.init_centre=-4",
         f"algo.tran_head.learnable={str(not freeze_transparency_head).lower()}",
         f"training.finetune_path={base_ckpt}",
         "checkpointing.resume_from_ckpt=false",
