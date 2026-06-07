@@ -654,7 +654,9 @@ class AbsorbingState(Diffusion):
         q_xs = torch.where(copy_flag.unsqueeze(-1), q_xs, q_xs_2)
         xs = sample_categorical(q_xs)
 
-    if torch.allclose(xs, x) and not self.time_conditioning:
+    #changed
+    
+    if torch.equal(xs, x) and not self.time_conditioning:
       p_x0_cache = p_x0
     else:
       p_x0_cache = None
