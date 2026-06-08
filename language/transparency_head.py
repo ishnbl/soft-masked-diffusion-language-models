@@ -62,15 +62,17 @@ def slerp_sm_feedback(input_ids, logits, embedding_matrix, mask_token_id,
                       SLERP angle over masked positions) for live logging
     Returns:          (B, T, D)  soft input embeddings
     """
+    #changed
+
     compute_dtype = torch.float32
-    E = embedding_matrix.to(compute_dtype)                     # (V, D)
+    E = embedding_matrix                                       # (V, D) — index only, no full cast
 
-    # Identity embeddings for all positions; masked positions will be overwritten.
     mask_pos = (input_ids == mask_token_id)                    # (B, T)
-    out = E[input_ids]                                         # (B, T, D)
-
+    
     if not mask_pos.any():
-        return out.to(embedding_matrix.dtype)
+        return E[input_ids].to(embedding_matrix.dtype)
+
+    out = E[input_ids].to(compute_dtype)      # only allocated when there are masked positions
 
     # --- Operate only on the M masked positions to avoid wasted topk over (B,T,V). ---
     masked_logits = logits[mask_pos]                           # (M, V)
@@ -81,13 +83,15 @@ def slerp_sm_feedback(input_ids, logits, embedding_matrix, mask_token_id,
     pi = torch.softmax(topk_logits.to(compute_dtype), dim=-1)               # (M, k)
 
     # Unit embeddings of the top-k tokens and Frechet mean mu*.
-    vhat = F.normalize(E[topk_indices], dim=-1, eps=eps)       # (M, k, D)
+    # AFTER
+    vhat = F.normalize(E[topk_indices].to(compute_dtype), dim=-1, eps=eps)  # (M, k, D)
     mu = frechet_mean_sphere(vhat, pi, n_iter, eps)            # (M, D)
 
     # Normalised mask embedding m_hat. Keep the original mask-token norm so we
     # can rescale the unit-sphere SLERP result back to the embedding scale the
     # backbone was trained on (otherwise norm-1 inputs are out of distribution).
-    mask_emb = E[mask_token_id]                                # (D,)
+    # AFTER
+    mask_emb = E[mask_token_id].to(compute_dtype)              # (D,)
     mask_norm = mask_emb.norm()                                # scalar
     mhat = F.normalize(mask_emb, dim=-1, eps=eps).expand_as(mu)  # (M, D)
 
@@ -106,10 +110,10 @@ def slerp_sm_feedback(input_ids, logits, embedding_matrix, mask_token_id,
     slerp = slerp * mask_norm                                  # (M, D)
 
     # Scatter slerp results back into the full (B,T,D) output tensor.
-    slerp_full = torch.zeros(*input_ids.shape, E.shape[-1],
-                             dtype=compute_dtype, device=input_ids.device)
-    slerp_full[mask_pos] = slerp
-    out = torch.where(mask_pos.unsqueeze(-1), slerp_full, out)
+    # changed
+    #out[mask_pos] = slerp
+    # AFTER
+    out = out.index_put((mask_pos,), slerp)
 
     if stats is not None:
         stats["slerp_angle_mean"] = omega.squeeze(-1).mean().detach()
@@ -137,7 +141,7 @@ class TransparencyHead(nn.Module):
         self.mixinputs_k = getattr(trans_args, "mixinputs_k", 3)
         self.transparency_alg = getattr(trans_args, "transparency_alg", "mixinputs_with_topk")
         self.slerp_n_iter = getattr(trans_args, "slerp_n_iter", 3)
-        self.learnable = getattr(trans_args, "learnable", True)
+        self.learnable = getattr(trans_args, "learnable", True)         
         self.fixed_lambda = getattr(trans_args, "fixed_lambda", None)
         if self.fixed_lambda is not None:
             self.fixed_lambda = float(self.fixed_lambda)
@@ -191,8 +195,12 @@ class TransparencyHead(nn.Module):
                                         torch.zeros_like(lambda_tensor))
             return lambda_tensor
 
-        if neg_entropy is None or self.scale is None:
-            return None
+        # changed 
+
+        if neg_entropy is None:
+            raise ValueError(
+                "neg_entropy must not be None when fixed_lambda is not set"
+            )
         
         lambda_tensor = neg_entropy
         lambda_tensor = self.scale * torch.sigmoid(self.steepness * (lambda_tensor - self.centre))
@@ -212,22 +220,27 @@ class TransparencyHead(nn.Module):
         # slerp_sm and topk never use p_full. Restrict the softmax to masked
         # positions only (avoids full (B,T,V) softmax for unmasked tokens).
         if self.transparency_alg in ("slerp_sm", "mixinputs_with_topk"):
+            # GATHER: Select only the logits for masked positions
+            #-----------changed------------
+
             masked_logits = logits_prelim[mask_positions]      # (M, V)
-            if masked_logits.shape[0] > 0:
+            neg_entropy = logits_prelim.new_zeros(input_ids.shape)
+            if self.fixed_lambda is None and masked_logits.shape[0] > 0:
                 neg_entropy_m, _ = self.get_neg_entropy_and_probabilities(
                     masked_logits, temperature=temperature)    # (M,)
-                neg_entropy = logits_prelim.new_zeros(input_ids.shape)
                 neg_entropy[mask_positions] = neg_entropy_m
-            else:
-                neg_entropy = logits_prelim.new_zeros(input_ids.shape)
             p_full = None
         else:
-            neg_entropy, p_full = self.get_neg_entropy_and_probabilities(
-                logits_prelim, temperature=temperature)
+            if self.fixed_lambda is None:
+                neg_entropy, p_full = self.get_neg_entropy_and_probabilities(
+                    logits_prelim, temperature=temperature)
+            else:
+                neg_entropy = logits_prelim.new_zeros(input_ids.shape)
+                p_full = None
 
         lambda_tensor = self.calculate_lambda_tensor(neg_entropy, mask_positions)
+        # AFTER- changed
         lambda_tensor = lambda_tensor.unsqueeze(-1)  # (B, T, 1)
-        lambda_tensor[~mask_positions] = 0.0
 
         # Stash the realized mean / std of lambda over masked positions (live logging).
         if mask_positions.any():
@@ -250,7 +263,7 @@ class TransparencyHead(nn.Module):
 
         if self.transparency_alg == "mixinputs_with_topk":
             # GATHER: Select only the logits for masked positions
-            masked_logits = logits_prelim[mask_positions]
+            #masked_logits = logits_prelim[mask_positions]
             
             if masked_logits.shape[0] > 0:
                 # COMPUTE: Get top-k indices and probs for masked items
@@ -303,8 +316,8 @@ class TransparencyHead(nn.Module):
 
     def get_only_topk_probs(self, logits, mixinputs_k=3):
         """
-        NEW: Returns (topk_indices, topk_probs)
-        Shape: (B, T, k), (B, T, k)
+        Returns (topk_indices, topk_probs) for the M already-masked positions.
+        Shape: (M, k), (M, k)  — expansion to (B, T, k) is done by the caller.
         """
         topk_logits, topk_indices = torch.topk(logits, k=mixinputs_k, dim=-1)
         topk_logits = topk_logits.to(torch.float32)

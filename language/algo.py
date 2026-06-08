@@ -157,10 +157,10 @@ class MDLM_SM(MDLM):
       loss = super().training_step(batch, batch_idx)
 
       # Log the learnable transparency parameters.
-      self.log('transparency/scale', self.tran_head.scale.item(), on_step=True, on_epoch=False, sync_dist=True)
-      self.log('transparency/centre', self.tran_head.centre.item(), on_step=True, on_epoch=False, sync_dist=True)
-      self.log('transparency/steepness', self.tran_head.steepness.item(), on_step=True, on_epoch=False, sync_dist=True)
-      self.log('transparency/temperature', self.tran_head.temperature.item(), on_step=True, on_epoch=False, sync_dist=True)
+      self.log('transparency/scale', self.tran_head.scale.item(), on_step=True, on_epoch=False, sync_dist=False)
+      self.log('transparency/centre', self.tran_head.centre.item(), on_step=True, on_epoch=False, sync_dist=False)
+      self.log('transparency/steepness', self.tran_head.steepness.item(), on_step=True, on_epoch=False, sync_dist=False)
+      self.log('transparency/temperature', self.tran_head.temperature.item(), on_step=True, on_epoch=False, sync_dist=False)
 
       # Log the realized interpolation behavior (set during the head's forward).
       if self.tran_head.last_lambda_mean is not None:
@@ -409,7 +409,8 @@ class MDLM_SM(MDLM):
           q_xs = torch.where(copy_flag.unsqueeze(-1), q_xs, q_xs_2)
           xs = sample_categorical(q_xs)
       
-      if torch.allclose(xs, x) and not self.time_conditioning:
+      # changed
+      if torch.equal(xs, x) and not self.time_conditioning:
         p_x0_cache = p_x0
       else:
         p_x0_cache = None
