@@ -1,17 +1,25 @@
 """
-Multi-GPU Modal runner for the SLERP (`slerp_sm`) soft-masking path.
+Multi-GPU Modal runner for the top-k (`mixinputs_with_topk`) soft-masking path.
 
-This is the multi-GPU counterpart to run_modal.py. It launches the `slerp_sm`
-pathway under PyTorch-Lightning DDP across N GPUs *in a single Modal container*
-(single node, N processes), which is exactly what exercises the DDP-safe
-soft-mask gate added in algo.py (`MDLM_SM.nll`): step-seeded Bernoulli +
-globally all-reduced time band, so every rank takes the same soft-mask branch.
+This is the top-k counterpart to run_modal_multigpu.py (which is slerp-only).
+It is a SEPARATE script on purpose: the slerp runner is left byte-for-byte
+intact so that path can never be perturbed by a change made for top-k. The two
+share nothing at runtime except the (identical) image spec and Modal volumes,
+which means Modal still reuses the same cached image layers.
 
-It duplicates the image / volumes / path constants from run_modal.py (identical
-spec so Modal reuses cached image layers), and adds the multi-GPU wiring
-(N visible GPUs => device_count()==N==trainer.devices,
-so the world size, the `device_count:` resolver, and the derived
-accumulate_grad_batches all stay in lockstep).
+Like the slerp runner, it launches under PyTorch-Lightning DDP across N GPUs in a
+single Modal container (single node, N processes). Top-k is DDP-safe via the SAME
+mechanism slerp relies on: the soft-mask gate in algo.py (`MDLM_SM.nll`) is
+transparency-alg-agnostic — it makes the soft-mask branch decision identical on
+every rank (step-seeded Bernoulli + globally all-reduced time band), so the
+tran_head sub-graph is exercised (or not) in lockstep and the DDP gradient
+all-reduce stays in sync. Top-k's own forward only builds local, same-shaped
+tensors (no collectives in its data-dependent branch), so it adds no new
+cross-rank divergence.
+
+GPU count/type are set via NUM_GPUS / GPU_TYPE env vars (they must be fixed at
+import time; this Modal version has no per-call gpu override). Everything else is
+a normal --flag.
 
 Setup (one-time, local) — same as run_modal.py:
   pip install modal
@@ -19,22 +27,18 @@ Setup (one-time, local) — same as run_modal.py:
   modal secret create wandb-secret WANDB_API_KEY=<your-key>
   modal volume put mdlm-checkpoints /local/path/mdlm_owt.ckpt mdlm_owt.ckpt
 
-GPU count/type are set via NUM_GPUS / GPU_TYPE env vars (they must be fixed at
-import time; this Modal version has no per-call gpu override). Everything else is
-a normal --flag.
-
 Quick 2-GPU smoke test (20 steps, small global batch so it finishes fast):
   cd language/
-  NUM_GPUS=2 GPU_TYPE=L40S modal run run_modal_multigpu.py \
+  NUM_GPUS=2 GPU_TYPE=L40S modal run run_modal_multigpu_topk.py \
       --max-steps 20 --global-batch-size 64 --batch-size 16
 
 Full 4-GPU finetune run:
-  NUM_GPUS=4 GPU_TYPE=A100 modal run run_modal_multigpu.py \
+  NUM_GPUS=4 GPU_TYPE=A100 modal run run_modal_multigpu_topk.py \
       --max-steps 5000 --global-batch-size 512 --batch-size 16
 
 Pin lambda to a fixed value (skips the learned/entropy-gated lambda head, same as
 run_modal.py's --fixed-lambda); must be in [0, 1]:
-  NUM_GPUS=4 GPU_TYPE=A100 modal run run_modal_multigpu.py \
+  NUM_GPUS=4 GPU_TYPE=A100 modal run run_modal_multigpu_topk.py \
       --max-steps 5000 --global-batch-size 512 --batch-size 16 --fixed-lambda 0.5
 
 Download outputs:
@@ -57,7 +61,8 @@ OUT_DIR = "/vol/outputs"
 LANGUAGE_DIR = "/workspace/language"
 
 # ── container image ───────────────────────────────────────────────────────────
-# Identical spec to run_modal.py so Modal reuses the cached image layers.
+# Identical spec to run_modal.py / run_modal_multigpu.py so Modal reuses the
+# cached image layers.
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git", "curl", "patch", "git-lfs")
@@ -98,12 +103,12 @@ image = (
     .add_local_dir(".", remote_path=LANGUAGE_DIR, copy=True)
 )
 
-app = modal.App("slerp-multigpu")
+app = modal.App("topk-multigpu")
 
 # GPU allocation must be fixed at function-definition (import) time. Older Modal
 # has no per-call gpu override (Function.with_options), so the count/type are
 # read from env vars here instead of CLI flags. Set them before `modal run`:
-#   NUM_GPUS=4 GPU_TYPE=A100 modal run run_modal_multigpu.py --max-steps 5000 ...
+#   NUM_GPUS=4 GPU_TYPE=A100 modal run run_modal_multigpu_topk.py --max-steps 5000 ...
 NUM_GPUS = int(os.environ.get("NUM_GPUS", "2"))
 GPU_TYPE = os.environ.get("GPU_TYPE", "L40S")  # L40S | A100 | A100-80GB | H100 ...
 GPU_SPEC = f"{GPU_TYPE}:{NUM_GPUS}"
@@ -116,14 +121,13 @@ GPU_SPEC = f"{GPU_TYPE}:{NUM_GPUS}"
     volumes={CKPT_DIR: ckpt_volume, DATA_DIR: data_volume, OUT_DIR: out_volume},
     secrets=[modal.Secret.from_name("wandb-secret")],
 )
-def train_mg(
+def train_mg_topk(
     num_gpus: int,
     base_ckpt_filename: str = "mdlm_owt.ckpt",
     seed: int = 1,
     max_steps: int = 5000,
     model: str = "small",
     data: str = "openwebtext-split",
-    slerp_n_iter: int = 3,
     global_batch_size: int = 512,
     batch_size: int = 16,
     num_workers: int = 4,
@@ -205,8 +209,8 @@ def train_mg(
                 print(f"[cache] Corrupted ({e}) — removing: {dat_path}")
                 shutil.rmtree(dat_path, ignore_errors=True)
 
-    group = f"slerp_mg_{num_gpus}gpu_{model}_{data}_seed{seed}"
-    run_name = f"slerp-mg-{num_gpus}gpu-{model}-{data}-seed{seed}"
+    group = f"topk_mg_{num_gpus}gpu_{model}_{data}_seed{seed}"
+    run_name = f"topk-mg-{num_gpus}gpu-{model}-{data}-seed{seed}"
     out_dir = f"{OUT_DIR}/{group}"
 
     cmd = [
@@ -215,8 +219,8 @@ def train_mg(
         "-m",
         "main",
         "algo=mdlm_sm",
-        "algo.tran_head.transparency_alg=slerp_sm",
-        f"algo.tran_head.slerp_n_iter={slerp_n_iter}",
+        # --- top-k path (vs slerp_sm in run_modal_multigpu.py) ---
+        "algo.tran_head.transparency_alg=mixinputs_with_topk",
         "algo.tran_head.mixinputs_k=3",
         # lambda-activation init (same as the finetune scripts).
         "algo.tran_head.init_scale=0.5",
@@ -262,7 +266,7 @@ def train_mg(
     if fixed_lambda >= 0.0:
         cmd.append(f"algo.tran_head.fixed_lambda={fixed_lambda}")
 
-    print(f"[train] Starting DDP run: {run_name}")
+    print(f"[train] Starting DDP run (top-k): {run_name}")
     print(
         f"[train] world size={num_gpus}  per-GPU batch={batch_size}  "
         f"accum={accumulate_grad_batches}  global={global_batch_size}"
@@ -288,7 +292,6 @@ def main(
     max_steps: int = 5000,
     model: str = "small",
     data: str = "openwebtext-split",
-    slerp_n_iter: int = 3,
     global_batch_size: int = 512,
     batch_size: int = 16,
     num_workers: int = 4,
@@ -300,17 +303,16 @@ def main(
     # (see the module-level GPU_SPEC), because this Modal version can't override
     # the gpu allocation per call.
     print(
-        f"[local] gpu={GPU_SPEC} (single node, {NUM_GPUS}-way DDP). "
+        f"[local] gpu={GPU_SPEC} (single node, {NUM_GPUS}-way DDP, top-k). "
         f"Set NUM_GPUS / GPU_TYPE env vars to change this."
     )
-    train_mg.remote(
+    train_mg_topk.remote(
         num_gpus=NUM_GPUS,
         base_ckpt_filename=base_ckpt,
         seed=seed,
         max_steps=max_steps,
         model=model,
         data=data,
-        slerp_n_iter=slerp_n_iter,
         global_batch_size=global_batch_size,
         batch_size=batch_size,
         num_workers=num_workers,
@@ -321,5 +323,5 @@ def main(
     print("\n[local] Run complete.")
     print(
         f"[local] Download outputs:  modal volume get mdlm-outputs "
-        f"{OUT_DIR}/slerp_mg_{NUM_GPUS}gpu_{model}_{data}_seed{seed} ./local_outputs/"
+        f"{OUT_DIR}/topk_mg_{NUM_GPUS}gpu_{model}_{data}_seed{seed} ./local_outputs/"
     )
