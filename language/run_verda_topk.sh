@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # ============================================================
-# run_verda.sh — Drop-in replacement for run_modal_multigpu.py
-# Runs the slerp_sm soft-masking MDLM finetune on a Verda VM.
-# All hydra args are identical to the Modal multi-GPU runner.
+# run_verda_topk.sh — Drop-in replacement for run_modal_multigpu_topk.py
+# Runs the mixinputs_with_topk soft-masking MDLM finetune on a Verda VM.
+# All hydra args are identical to the Modal top-k multi-GPU runner.
+#
+# This is a SEPARATE script from run_verda.sh on purpose: the slerp runner
+# is left byte-for-byte intact so that path can never be perturbed by a
+# change made for top-k. Matches the same design decision in the Modal scripts.
 #
 # Usage (from inside the language/ directory):
-#   bash run_verda.sh [options]
+#   bash run_verda_topk.sh [options]
 #
 # Options (all optional — defaults shown):
 #   --num-gpus              2
@@ -14,7 +18,6 @@
 #   --max-steps             5000
 #   --model                 small
 #   --data                  openwebtext-split
-#   --slerp-n-iter          3
 #   --global-batch-size     512
 #   --batch-size            16
 #   --num-workers           4
@@ -26,13 +29,13 @@
 #                                  to pin lambda and skip the learned lambda head)
 #
 # Fixed-lambda example:
-#   bash run_verda.sh --num-gpus 4 --max-steps 5000 --fixed-lambda 0.5
+#   bash run_verda_topk.sh --num-gpus 4 --max-steps 5000 --fixed-lambda 0.5
 #
 # Quick smoke test (2 GPUs, 20 steps):
-#   bash run_verda.sh --num-gpus 2 --max-steps 20 --global-batch-size 64 --batch-size 16
+#   bash run_verda_topk.sh --num-gpus 2 --max-steps 20 --global-batch-size 64 --batch-size 16
 #
 # Full 4-GPU run:
-#   bash run_verda.sh --num-gpus 4 --max-steps 5000
+#   bash run_verda_topk.sh --num-gpus 4 --max-steps 5000
 # ============================================================
 
 set -euo pipefail
@@ -44,7 +47,6 @@ SEED=1
 MAX_STEPS=5000
 MODEL="small"
 DATA="openwebtext-split"
-SLERP_N_ITER=3
 GLOBAL_BATCH_SIZE=512
 BATCH_SIZE=16
 NUM_WORKERS=4
@@ -53,6 +55,7 @@ LOG_EVERY=3
 DATA_DIR="/workspace/data"
 OUT_DIR="/workspace/outputs"
 FIXED_LAMBDA=-1.0
+# Note: no SLERP_N_ITER — top-k does not use slerp iterations
 
 # ── Parse arguments ───────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -63,7 +66,6 @@ while [[ $# -gt 0 ]]; do
     --max-steps)           MAX_STEPS="$2";          shift 2 ;;
     --model)               MODEL="$2";              shift 2 ;;
     --data)                DATA="$2";               shift 2 ;;
-    --slerp-n-iter)        SLERP_N_ITER="$2";       shift 2 ;;
     --global-batch-size)   GLOBAL_BATCH_SIZE="$2";  shift 2 ;;
     --batch-size)          BATCH_SIZE="$2";         shift 2 ;;
     --num-workers)         NUM_WORKERS="$2";        shift 2 ;;
@@ -122,14 +124,14 @@ fi
 # ── Directories ───────────────────────────────────────────────
 mkdir -p "$DATA_DIR/owt_cache" "$OUT_DIR"
 
-GROUP="slerp_mg_${NUM_GPUS}gpu_${MODEL}_${DATA}_seed${SEED}"
-RUN_NAME="slerp-mg-${NUM_GPUS}gpu-${MODEL}-${DATA}-seed${SEED}"
+GROUP="topk_mg_${NUM_GPUS}gpu_${MODEL}_${DATA}_seed${SEED}"
+RUN_NAME="topk-mg-${NUM_GPUS}gpu-${MODEL}-${DATA}-seed${SEED}"
 RUN_OUT_DIR="${OUT_DIR}/${GROUP}"
 mkdir -p "$RUN_OUT_DIR"
 
 echo ""
 echo "========================================"
-echo " SLERP Soft-Masked MDLM — Verda Run"
+echo " Top-K Soft-Masked MDLM — Verda Run"
 echo "========================================"
 echo " GPUs:          $NUM_GPUS"
 echo " Per-GPU batch: $BATCH_SIZE"
@@ -151,12 +153,11 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # ── Launch training ───────────────────────────────────────────
 # Build command as array so fixed_lambda can be conditionally appended
-# (matches the exact same conditional logic in run_modal_multigpu.py)
+# (matches the exact same conditional logic in run_modal_multigpu_topk.py)
 CMD=(
   python -u -m main
   algo=mdlm_sm
-  algo.tran_head.transparency_alg=slerp_sm
-  algo.tran_head.slerp_n_iter="${SLERP_N_ITER}"
+  algo.tran_head.transparency_alg=mixinputs_with_topk
   algo.tran_head.mixinputs_k=3
   algo.tran_head.init_scale=0.5
   algo.tran_head.init_centre=-4

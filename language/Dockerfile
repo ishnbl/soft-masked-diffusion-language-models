@@ -27,7 +27,7 @@ RUN apt-get update && apt-get install -y \
     python3.12 \
     python3.12-dev \
     python3.12-venv \
-    python3.12-distutils \
+    
     && rm -rf /var/lib/apt/lists/*
 
 # ── 2. Make python3.12 the system default ────────────────────
