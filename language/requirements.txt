@@ -1,30 +1,53 @@
-# conda install nvidia/label/cuda-12.4.0::cuda-toolkit
+# ============================================================
+# requirements.txt — Verda VM / Dockerfile
+# Source of truth: run_modal_multigpu.py image spec
+# Python: 3.12   CUDA: 12.4
+# ============================================================
+
+# --- Core numerics (must come before torch) -----------------
+numpy<2                  # torch 2.5 is incompatible with numpy 2.x
+
+# --- PyTorch stack ------------------------------------------
+# Install these SEPARATELY with the cu124 index URL:
+#   pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
+#       --index-url https://download.pytorch.org/whl/cu124
+torch==2.5.1
+torchvision==0.20.1
+torchaudio==2.5.1
+triton==3.1.0
+
+# --- ML / training ------------------------------------------
 datasets==2.15.0
 einops==0.7.0
-fsspec
-git-lfs==1.6
+fsspec==2023.10.0
 h5py==3.10.0
 hydra-core==1.3.2
-ipdb==0.13.13
 lightning==2.2.1
-notebook==7.1.1
-nvitop==1.3.2
 omegaconf==2.3.0
 packaging==23.2
 pandas==2.2.1
 rich==13.7.1
-seaborn==0.13.2
 scikit-learn==1.4.0
 transformers==4.38.2
-triton==2.2.0
-torch==2.3.1
-torchaudio==2.3.1
 torchmetrics==1.6.1
-torchvision==0.18.1
-wandb
 timm
-ocifs
-hf_transfer
+wandb
 huggingface-hub
-# Install flash attention only after installing the above modules via pip install -r requirements.txt
-# flash_attn==2.7.4.post1
+hf_transfer
+mauve-text            # required: main.py does `import mauve`
+
+# --- Dev / monitoring (optional but useful on the VM) -------
+ipdb==0.13.13
+nvitop==1.3.2
+seaborn==0.13.2
+notebook==7.1.1
+
+# --- Flash Attention ----------------------------------------
+# DO NOT install via pip install flash_attn — it will try to compile from
+# source and fail or take hours. Use the prebuilt wheel instead:
+#
+#   pip install --no-deps \
+#     https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.5cxx11abiFALSE-cp312-cp312-linux_x86_64.whl
+#
+# This wheel is: CUDA 12.x | torch 2.5 | cxx11abi=False | Python 3.12
+# --no-deps is intentional (matches Modal exactly — avoids torch re-install)
