@@ -33,7 +33,7 @@ SEED="${SEED:-1}"
 MAX_STEPS="${MAX_STEPS:-5000}"
 FIXED_LAMBDA="${FIXED_LAMBDA:--1.0}"                 # -1.0 = learned; 0..1 = pinned
 ENV_NAME="${ENV_NAME:-sm-env}"
-CONDA_HOME="${CONDA_HOME:-$HOME/miniconda3}"
+CONDA_HOME="${CONDA_HOME:-/opt/miniforge3}"   # shared miniforge from setup_cluster.sh
 
 # Shared/persistent storage visible from the compute node.
 BASE_CKPT="${BASE_CKPT:-$HOME/mdlm/checkpoints/mdlm.ckpt}"
