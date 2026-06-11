@@ -51,9 +51,12 @@ fi
 source "${CONDA_HOME}/etc/profile.d/conda.sh"
 conda activate "$ENV_NAME"
 
-# ── Run from language/ (this script lives in language/verda/) ──────────────
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LANG_DIR="$(dirname "$SCRIPT_DIR")"
+# ── Run from language/ ─────────────────────────────────────────────────────
+# Slurm copies the batch script to a spool dir, so ${BASH_SOURCE[0]} is NOT in
+# the repo. Use SLURM_SUBMIT_DIR (where `sbatch` was run); step up if it was
+# submitted from verda/.
+LANG_DIR="${SLURM_SUBMIT_DIR:-$PWD}"
+[[ "$(basename "$LANG_DIR")" == "verda" ]] && LANG_DIR="$(dirname "$LANG_DIR")"
 cd "$LANG_DIR"
 
 echo "[job] node=$(hostname)  NUM_GPUS=${NUM_GPUS}  FIXED_LAMBDA=${FIXED_LAMBDA}"
