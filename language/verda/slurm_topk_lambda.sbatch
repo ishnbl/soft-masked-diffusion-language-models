@@ -63,6 +63,13 @@ echo "[job] node=$(hostname)  NUM_GPUS=${NUM_GPUS}  FIXED_LAMBDA=${FIXED_LAMBDA}
 echo "[job] CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
 nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader || true
 
+# We launch plain `python` and let Lightning spawn one process per GPU. If
+# Lightning sees SLURM_* it uses SLURMEnvironment, which reads world size from
+# SLURM_NTASKS (=1 here) and pins the run to ONE GPU. Hide SLURM from Lightning
+# so it uses its own DDP launcher across all visible GPUs (single node).
+unset SLURM_NTASKS SLURM_NTASKS_PER_NODE SLURM_NPROCS \
+      SLURM_PROCID SLURM_LOCALID SLURM_NODEID
+
 bash run_verda_topk_lambda.sh \
   --num-gpus "$NUM_GPUS" \
   --seed "$SEED" \
