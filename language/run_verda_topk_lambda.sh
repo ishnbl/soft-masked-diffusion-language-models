@@ -149,12 +149,33 @@ fi
 # written — we resume from last.ckpt.
 if [ "$RESUME" = "1" ]; then
   RESUME_CKPT="${RUN_OUT_DIR}/checkpoints/last.ckpt"
-  if [ ! -f "$RESUME_CKPT" ]; then
-    echo "ERROR: --resume set but no checkpoint at $RESUME_CKPT"; exit 1
+  if [ -f "$RESUME_CKPT" ]; then
+    echo "[train] Resuming from ${RESUME_CKPT}"
+    CMD+=("checkpointing.resume_from_ckpt=true"
+          "checkpointing.resume_ckpt_path=${RESUME_CKPT}")
+    
+    # Auto-detect existing WandB run ID from outputs directory to resume the same run
+    WANDB_DIR="${RUN_OUT_DIR}/wandb"
+    WANDB_ID=""
+    if [ -d "$WANDB_DIR" ]; then
+      # Find the most recently modified run directory (e.g. run-YYYYMMDD_HHMMSS-runid)
+      LATEST_RUN_DIR=$(ls -td "${WANDB_DIR}"/run-* 2>/dev/null | head -n 1 || true)
+      if [ -n "$LATEST_RUN_DIR" ]; then
+        # Extract runid by removing the prefix 'run-YYYYMMDD_HHMMSS-'
+        WANDB_ID=$(basename "$LATEST_RUN_DIR" | sed 's/run-[0-9]*_[0-9]*-//')
+      fi
+    fi
+    
+    if [ -n "$WANDB_ID" ]; then
+      echo "[train] Auto-detected WandB run ID to resume: ${WANDB_ID}"
+      CMD+=("wandb.id=${WANDB_ID}" "wandb.resume=allow")
+    else
+      echo "[train] No existing WandB run found to resume. A new WandB run will be created."
+    fi
+  else
+    echo "[train] WARNING: --resume set but no checkpoint found at ${RESUME_CKPT}. Starting training from scratch."
+    CMD+=("checkpointing.resume_from_ckpt=false")
   fi
-  echo "[train] Resuming from ${RESUME_CKPT}"
-  CMD+=("checkpointing.resume_from_ckpt=true"
-        "checkpointing.resume_ckpt_path=${RESUME_CKPT}")
 else
   CMD+=("checkpointing.resume_from_ckpt=false")
 fi

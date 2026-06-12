@@ -135,43 +135,39 @@ class TrainerBase(L.LightningModule):
       self.ema.load_state_dict(checkpoint['ema'])
     # Copied from:
     # https://github.com/Dao-AILab/flash-attention/blob/main/training/src/datamodules/language_modeling_hf.py#L41
-    self.fast_forward_epochs = checkpoint['loops'][
-      'fit_loop']['epoch_progress']['current']['completed']
-    self.fast_forward_batches = checkpoint['loops'][
-      'fit_loop']['epoch_loop.batch_progress'][
-        'current']['completed']
+    # Robustly check for the loop progress keys in PyTorch Lightning 2.x and PL 1.x without raising a KeyError.
+    self.fast_forward_epochs = 0
+    self.fast_forward_batches = 0
+    
+    try:
+      if 'loops' in checkpoint and 'fit_loop' in checkpoint['loops']:
+        fit_loop = checkpoint['loops']['fit_loop']
+        
+        # Resolve epoch progress
+        if 'epoch_progress' in fit_loop:
+          self.fast_forward_epochs = fit_loop['epoch_progress']['current']['completed']
+        elif 'epoch_loop.epoch_progress' in fit_loop:
+          self.fast_forward_epochs = fit_loop['epoch_loop.epoch_progress']['current']['completed']
+        
+        # Resolve batch progress
+        if 'epoch_loop' in fit_loop and 'batch_progress' in fit_loop['epoch_loop']:
+          self.fast_forward_batches = fit_loop['epoch_loop']['batch_progress']['current']['completed']
+        elif 'epoch_loop.batch_progress' in fit_loop:
+          self.fast_forward_batches = fit_loop['epoch_loop.batch_progress']['current']['completed']
+        elif 'batch_progress' in fit_loop:
+          self.fast_forward_batches = fit_loop['batch_progress']['current']['completed']
+    except Exception as e:
+      # Log warning but don't crash
+      pass
 
   def on_save_checkpoint(self, checkpoint):
     if self.ema:
       checkpoint['ema'] = self.ema.state_dict()
-    # Copied from:
-    # https://github.com/Dao-AILab/flash-attention/blob/main/training/src/tasks/seq.py
-    # ['epoch_loop.batch_progress']['total']['completed']
-    # is 1 iteration behind, so we're using the optimizer's progress.
-    checkpoint['loops']['fit_loop'][
-      'epoch_loop.batch_progress']['total'][
-        'completed'] = checkpoint['loops']['fit_loop'][
-          'epoch_loop.automatic_optimization.optim_progress'][
-            'optimizer']['step']['total'][
-              'completed'] * self.trainer.accumulate_grad_batches
-    checkpoint['loops']['fit_loop'][
-      'epoch_loop.batch_progress']['current'][
-        'completed'] = checkpoint['loops']['fit_loop'][
-          'epoch_loop.automatic_optimization.optim_progress'][
-            'optimizer']['step']['current'][
-              'completed'] * self.trainer.accumulate_grad_batches
-    # _batches_that_stepped tracks the number of global steps,
-    # not the number of local steps, so we don't multiply with
-    # self.trainer.accumulate_grad_batches here.
-    checkpoint['loops']['fit_loop'][
-      'epoch_loop.state_dict'][
-        '_batches_that_stepped'] = checkpoint['loops']['fit_loop'][
-          'epoch_loop.automatic_optimization.optim_progress'][
-            'optimizer']['step']['total']['completed']
+    
+    # Safely load sampler state if present
     if 'sampler' not in checkpoint.keys():
       checkpoint['sampler'] = {}
-    if hasattr(self.trainer.train_dataloader.sampler,
-               'state_dict'):
+    if hasattr(self.trainer, 'train_dataloader') and hasattr(self.trainer.train_dataloader, 'sampler') and hasattr(self.trainer.train_dataloader.sampler, 'state_dict'):
       sampler_state_dict = self.trainer.\
         train_dataloader.sampler.state_dict()
       checkpoint['sampler'][
@@ -180,14 +176,42 @@ class TrainerBase(L.LightningModule):
     else:
       checkpoint['sampler']['random_state'] = None
 
+    # Apply PL 1.x epoch_loop.batch_progress patch only if those keys exist
+    try:
+      if 'loops' in checkpoint and 'fit_loop' in checkpoint['loops']:
+        fit_loop = checkpoint['loops']['fit_loop']
+        if 'epoch_loop.batch_progress' in fit_loop and 'epoch_loop.automatic_optimization.optim_progress' in fit_loop:
+          # PL 1.x workaround for batch_progress off-by-one
+          fit_loop['epoch_loop.batch_progress']['total']['completed'] = (
+            fit_loop['epoch_loop.automatic_optimization.optim_progress']['optimizer']['step']['total']['completed']
+            * self.trainer.accumulate_grad_batches
+          )
+          fit_loop['epoch_loop.batch_progress']['current']['completed'] = (
+            fit_loop['epoch_loop.automatic_optimization.optim_progress']['optimizer']['step']['current']['completed']
+            * self.trainer.accumulate_grad_batches
+          )
+          if 'epoch_loop.state_dict' in fit_loop:
+            fit_loop['epoch_loop.state_dict']['_batches_that_stepped'] = (
+              fit_loop['epoch_loop.automatic_optimization.optim_progress']['optimizer']['step']['total']['completed']
+            )
+    except Exception as e:
+      # Do not crash the checkpoint saving process if the workaround fails
+      pass
+
   def on_train_start(self):
     if self.ema:
       self.ema.move_shadow_params_to_device(self.device)
     # Adapted from:
     # https://github.com/Dao-AILab/flash-attention/blob/main/training/src/datamodules/language_modeling_hf.py
-    distributed = (
-      self.trainer._accelerator_connector.use_distributed_sampler
-      and self.trainer._accelerator_connector.is_distributed)
+    # Robust check for distributed training compatible with PL 1.x and 2.x
+    distributed = False
+    if hasattr(self.trainer, 'world_size'):
+      distributed = self.trainer.world_size > 1
+    elif hasattr(self.trainer, '_accelerator_connector'):
+      distributed = (
+        getattr(self.trainer._accelerator_connector, 'use_distributed_sampler', False)
+        and getattr(self.trainer._accelerator_connector, 'is_distributed', False)
+      )
     if distributed:
       sampler_cls = dataloader.FaultTolerantDistributedSampler
     else:
