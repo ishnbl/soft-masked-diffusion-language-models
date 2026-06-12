@@ -32,6 +32,7 @@ NUM_GPUS="${NUM_GPUS:-4}"                            # keep in sync with --gres
 SEED="${SEED:-1}"
 MAX_STEPS="${MAX_STEPS:-5000}"
 FIXED_LAMBDA="${FIXED_LAMBDA:--1.0}"                 # -1.0 = learned; 0..1 = pinned
+RESUME="${RESUME:-0}"                                # 1 = resume from last.ckpt
 ENV_NAME="${ENV_NAME:-sm-env}"
 CONDA_HOME="${CONDA_HOME:-/opt/miniforge3}"   # shared miniforge from setup_cluster.sh
 
@@ -70,6 +71,9 @@ nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader || true
 unset SLURM_NTASKS SLURM_NTASKS_PER_NODE SLURM_NPROCS \
       SLURM_PROCID SLURM_LOCALID SLURM_NODEID
 
+EXTRA=()
+[[ "$RESUME" == "1" ]] && EXTRA+=(--resume)
+
 bash run_verda_topk_lambda.sh \
   --num-gpus "$NUM_GPUS" \
   --seed "$SEED" \
@@ -77,7 +81,8 @@ bash run_verda_topk_lambda.sh \
   --base-ckpt "$BASE_CKPT" \
   --data-dir "$DATA_DIR" \
   --out-dir "$OUT_DIR" \
-  --fixed-lambda "$FIXED_LAMBDA"
+  --fixed-lambda "$FIXED_LAMBDA" \
+  "${EXTRA[@]}"
 
 echo "[job] done. Outputs under ${OUT_DIR}"
 [[ "$WANDB_MODE" == "offline" ]] && \

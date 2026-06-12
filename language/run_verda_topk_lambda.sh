@@ -26,10 +26,12 @@ LOG_EVERY=3
 DATA_DIR="/workspace/data"
 OUT_DIR="/workspace/outputs"
 FIXED_LAMBDA=-1.0          # -1.0 = learned lambda; set 0..1 to pin
+RESUME=0                   # 1 = resume from <out>/checkpoints/last.ckpt
 
 # ── Parse arguments ───────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --resume)            RESUME=1;               shift   ;;
     --num-gpus)          NUM_GPUS="$2";          shift 2 ;;
     --base-ckpt)         BASE_CKPT="$2";         shift 2 ;;
     --seed)              SEED="$2";              shift 2 ;;
@@ -130,7 +132,6 @@ CMD=(
   eval.compute_generative_perplexity=False
   eval.generate_samples=False
   training.finetune_path="${BASE_CKPT}"
-  checkpointing.resume_from_ckpt=false
   callbacks.checkpoint_every_n_steps.every_n_train_steps="${CHECKPOINT_EVERY}"
   wandb.group="${GROUP}"
   wandb.name="${RUN_NAME}"
@@ -141,6 +142,21 @@ CMD=(
 # Pin lambda only when >= 0.0
 if python -c "import sys; sys.exit(0 if float('${FIXED_LAMBDA}') >= 0.0 else 1)" 2>/dev/null; then
   CMD+=("algo.tran_head.fixed_lambda=${FIXED_LAMBDA}")
+fi
+
+# Resume from the rolling last.ckpt (full Lightning state: weights, optimizer,
+# step count, LR schedule). Validation is disabled, so best.ckpt is never
+# written — we resume from last.ckpt.
+if [ "$RESUME" = "1" ]; then
+  RESUME_CKPT="${RUN_OUT_DIR}/checkpoints/last.ckpt"
+  if [ ! -f "$RESUME_CKPT" ]; then
+    echo "ERROR: --resume set but no checkpoint at $RESUME_CKPT"; exit 1
+  fi
+  echo "[train] Resuming from ${RESUME_CKPT}"
+  CMD+=("checkpointing.resume_from_ckpt=true"
+        "checkpointing.resume_ckpt_path=${RESUME_CKPT}")
+else
+  CMD+=("checkpointing.resume_from_ckpt=false")
 fi
 
 "${CMD[@]}"
