@@ -31,6 +31,7 @@ set -euo pipefail
 NUM_GPUS="${NUM_GPUS:-4}"                            # keep in sync with --gres
 SEED="${SEED:-1}"
 MAX_STEPS="${MAX_STEPS:-5000}"
+CHECKPOINT_EVERY="${CHECKPOINT_EVERY:-100}"          # save last.ckpt every N steps
 FIXED_LAMBDA="${FIXED_LAMBDA:--1.0}"                 # -1.0 = learned; 0..1 = pinned
 RESUME="${RESUME:-0}"                                # 1 = resume from last.ckpt
 ENV_NAME="${ENV_NAME:-sm-env}"
@@ -78,6 +79,7 @@ bash run_verda_topk_lambda.sh \
   --num-gpus "$NUM_GPUS" \
   --seed "$SEED" \
   --max-steps "$MAX_STEPS" \
+  --checkpoint-every "$CHECKPOINT_EVERY" \
   --base-ckpt "$BASE_CKPT" \
   --data-dir "$DATA_DIR" \
   --out-dir "$OUT_DIR" \
