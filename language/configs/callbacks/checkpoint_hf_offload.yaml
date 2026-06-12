@@ -1,0 +1,11 @@
+checkpoint_hf_offload:
+  _target_: hf_offload_callback.HFOffloadModelCheckpoint
+  save_top_k: -1        # irrelevant for retention now, pruning handled above
+  save_last: True
+  dirpath: ${checkpointing.save_dir}/checkpoints
+  verbose: True
+  auto_insert_metric_name: False
+  every_n_train_steps: 100
+  hf_repo_id: <your-hf-username>/sm-mdlm-checkpoints
+  hf_path_prefix: slerp_seed1
+  keep_local_n: 2
