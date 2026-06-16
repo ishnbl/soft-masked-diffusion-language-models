@@ -221,7 +221,7 @@ def train_mg(
         f"algo.tran_head.mixinputs_k={mixinputs_k}",
         # lambda-activation init (same as the finetune scripts).
         "algo.tran_head.init_scale=0.5",
-        "algo.tran_head.init_centre=-4",
+        "algo.tran_head.init_centre=-4.1",
         f"model={model}",
         f"data={data}",
         f"data.cache_dir={DATA_DIR}/owt_cache",

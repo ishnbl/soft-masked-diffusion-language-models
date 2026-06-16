@@ -28,6 +28,7 @@ GLOBAL_BATCH="${GLOBAL_BATCH:-512}"
 PER_GPU_BATCH="${PER_GPU_BATCH:-16}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
 SLERP_N_ITER="${SLERP_N_ITER:-3}"
+MIXINPUTS_K="${MIXINPUTS_K:-3}"
 CHECKPOINT_EVERY="${CHECKPOINT_EVERY:-100}"
 LOG_EVERY="${LOG_EVERY:-3}"
 FIXED_LAMBDA="${FIXED_LAMBDA:--1.0}"           # >=0 pins lambda (must be in [0,1])
@@ -111,7 +112,7 @@ ARGS=(
   algo=mdlm_sm
   algo.tran_head.transparency_alg=slerp_sm
   algo.tran_head.slerp_n_iter="$SLERP_N_ITER"
-  algo.tran_head.mixinputs_k=3
+  algo.tran_head.mixinputs_k="$MIXINPUTS_K"
   algo.tran_head.init_scale=0.5
   algo.tran_head.init_centre=-4.446
   model="$MODEL"
