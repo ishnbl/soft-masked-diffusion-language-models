@@ -131,6 +131,7 @@ def train_mg_topk(
     global_batch_size: int = 512,
     batch_size: int = 16,
     num_workers: int = 4,
+    mixinputs_k: int = 1,
     checkpoint_every_n_steps: int = 100,
     fixed_lambda: float = -1.0,
     log_every_n_steps: int = 3,
@@ -221,7 +222,7 @@ def train_mg_topk(
         "algo=mdlm_sm",
         # --- top-k path (vs slerp_sm in run_modal_multigpu.py) ---
         "algo.tran_head.transparency_alg=mixinputs_with_topk",
-        "algo.tran_head.mixinputs_k=3",
+        f"algo.tran_head.mixinputs_k={mixinputs_k}",
         # lambda-activation init (same as the finetune scripts).
         "algo.tran_head.init_scale=0.5",
         "algo.tran_head.init_centre=-4",
@@ -295,6 +296,7 @@ def main(
     global_batch_size: int = 512,
     batch_size: int = 16,
     num_workers: int = 4,
+    mixinputs_k: int = 3,
     checkpoint_every_n_steps: int = 100,
     fixed_lambda: float = -1.0,
     log_every_n_steps: int = 3,
@@ -316,6 +318,7 @@ def main(
         global_batch_size=global_batch_size,
         batch_size=batch_size,
         num_workers=num_workers,
+        mixinputs_k=mixinputs_k,
         checkpoint_every_n_steps=checkpoint_every_n_steps,
         fixed_lambda=fixed_lambda,
         log_every_n_steps=log_every_n_steps,
