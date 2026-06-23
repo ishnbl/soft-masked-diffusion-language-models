@@ -75,16 +75,24 @@ except Exception:
     secrets=[modal.Secret.from_name("wandb-secret")],
 )
 def run_eval(
-    checkpoint_filename: str = "slerp_seed3_lambda_learnt_step5000.ckpt",
-    limit_val_batches: int = 5,
-    wandb_offline: bool = True,
+    checkpoint_filename: str = "mdlm_owt.ckpt",
+    limit_val_batches: str = "1.0",
+    fixed_lambda: float = -1.0,
+    wandb_offline: bool = False,
 ):
     import subprocess
     import shutil
 
-    checkpoint_path = f"{OUT_DIR}/{checkpoint_filename}"
+    # Decide volume based on file name
+    if checkpoint_filename == "mdlm_owt.ckpt":
+        checkpoint_path = f"{CKPT_DIR}/{checkpoint_filename}"
+        algo_name = "mdlm"
+    else:
+        checkpoint_path = f"{OUT_DIR}/{checkpoint_filename}"
+        algo_name = "mdlm_sm"
+
     if not os.path.exists(checkpoint_path):
-        raise FileNotFoundError(f"Checkpoint not found at {checkpoint_path} in outputs volume.")
+        raise FileNotFoundError(f"Checkpoint not found at {checkpoint_path}")
 
     work_dir = "/root/language"
     if not os.path.exists(work_dir):
@@ -102,8 +110,7 @@ def run_eval(
         "main",
         "mode=ppl_eval",
         f"eval.checkpoint_path={checkpoint_path}",
-        "algo=mdlm_sm",
-        "algo.tran_head.transparency_alg=slerp_sm",
+        f"algo={algo_name}",
         "model=small",
         "data=openwebtext-split",
         f"data.cache_dir={DATA_DIR}/owt_cache",
@@ -119,6 +126,11 @@ def run_eval(
         "strategy.find_unused_parameters=True",
     ]
 
+    if algo_name == "mdlm_sm":
+        cmd.append("algo.tran_head.transparency_alg=slerp_sm")
+        if fixed_lambda >= 0.0:
+            cmd.append(f"algo.tran_head.fixed_lambda={fixed_lambda}")
+
     print(f"[eval] Running: {' '.join(cmd)}")
     env = os.environ.copy()
     env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -129,5 +141,10 @@ def run_eval(
         data_volume.commit()
 
 @app.local_entrypoint()
-def main(limit_val_batches: str = "5", offline: bool = True):
-    run_eval.remote(limit_val_batches=limit_val_batches, wandb_offline=offline)
+def main(checkpoint: str = "mdlm_owt.ckpt", limit_val_batches: str = "1.0", fixed_lambda: float = -1.0, offline: bool = False):
+    run_eval.remote(
+        checkpoint_filename=checkpoint,
+        limit_val_batches=limit_val_batches,
+        fixed_lambda=fixed_lambda,
+        wandb_offline=offline
+    )
