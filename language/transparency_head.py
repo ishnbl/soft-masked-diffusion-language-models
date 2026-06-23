@@ -180,7 +180,7 @@ class TransparencyHead(nn.Module):
         epsilon = 1e-10
         p = torch.softmax(logits / temperature, dim=-1)   # (B,T,V)
         logp = torch.log(p + epsilon)
-        neg_entropy = torch.sum(p * logp, dim=-1)
+        neg_entropy = torch.sum(p * logp, dim=-1).to(dtype=logits.dtype)
         return neg_entropy, p
 
 

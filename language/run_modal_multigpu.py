@@ -119,18 +119,19 @@ GPU_SPEC = f"{GPU_TYPE}:{NUM_GPUS}"
 def train_mg(
     num_gpus: int,
     base_ckpt_filename: str = "mdlm_owt.ckpt",
-    seed: int = 1,
-    max_steps: int = 5000,
+    seed: int = 3,
+    max_steps: int = 2000,
     model: str = "small",
     data: str = "openwebtext-split",
     slerp_n_iter: int = 3,
     global_batch_size: int = 512,
     batch_size: int = 16,
     num_workers: int = 4,
-    mixinputs_k: int = 3,
-    checkpoint_every_n_steps: int = 100,
+    mixinputs_k: int = 5,
+    checkpoint_every_n_steps: int = 200,
     fixed_lambda: float = -1.0,
     log_every_n_steps: int = 3,
+    resume_ckpt_path: str = "",
 ):
     import subprocess
     import shutil
@@ -221,7 +222,7 @@ def train_mg(
         f"algo.tran_head.mixinputs_k={mixinputs_k}",
         # lambda-activation init (same as the finetune scripts).
         "algo.tran_head.init_scale=0.5",
-        "algo.tran_head.init_centre=-4.1",
+        "algo.tran_head.init_centre=-4",
         f"model={model}",
         f"data={data}",
         f"data.cache_dir={DATA_DIR}/owt_cache",
@@ -251,8 +252,7 @@ def train_mg(
         "sampling.predictor=sm",
         "eval.compute_generative_perplexity=False",
         "eval.generate_samples=False",
-        f"training.finetune_path={base_ckpt}",
-        "checkpointing.resume_from_ckpt=false",
+        f"checkpointing.resume_from_ckpt={'true' if resume_ckpt_path else 'false'}",
         f"callbacks.checkpoint_every_n_steps.every_n_train_steps={checkpoint_every_n_steps}",
         f"wandb.group={group}",
         f"wandb.name={run_name}",
@@ -262,6 +262,16 @@ def train_mg(
 
     if fixed_lambda >= 0.0:
         cmd.append(f"algo.tran_head.fixed_lambda={fixed_lambda}")
+
+    if resume_ckpt_path:
+        # Resuming restores model/optimizer/step state from this checkpoint, so
+        # the base-checkpoint finetune_path is NOT passed (avoid re-initializing
+        # weights from mdlm_owt.ckpt on top of the resumed state).
+        # NOTE: confirm `checkpointing.resume_ckpt_path` is the correct config key
+        # in your configs/config.yaml before relying on this — not verified here.
+        cmd.append(f"checkpointing.resume_ckpt_path={resume_ckpt_path}")
+    else:
+        cmd.append(f"training.finetune_path={base_ckpt}")
 
     print(f"[train] Starting DDP run: {run_name}")
     print(
@@ -285,18 +295,19 @@ def train_mg(
 @app.local_entrypoint()
 def main(
     base_ckpt: str = "mdlm_owt.ckpt",
-    seed: int = 1,
-    max_steps: int = 5000,
+    seed: int = 3,
+    max_steps: int = 2000,
     model: str = "small",
     data: str = "openwebtext-split",
     slerp_n_iter: int = 3,
     global_batch_size: int = 512,
     batch_size: int = 16,
     num_workers: int = 4,
-    mixinputs_k: int = 3,
+    mixinputs_k: int = 5,
     checkpoint_every_n_steps: int = 100,
     fixed_lambda: float = -1.0,
     log_every_n_steps: int = 3,
+    resume_ckpt_path: str = "",
 ):
     # GPU count/type are fixed at import from NUM_GPUS / GPU_TYPE env vars
     # (see the module-level GPU_SPEC), because this Modal version can't override
@@ -305,6 +316,8 @@ def main(
         f"[local] gpu={GPU_SPEC} (single node, {NUM_GPUS}-way DDP). "
         f"Set NUM_GPUS / GPU_TYPE env vars to change this."
     )
+    if resume_ckpt_path:
+        print(f"[local] Resuming from checkpoint: {resume_ckpt_path}")
     train_mg.remote(
         num_gpus=NUM_GPUS,
         base_ckpt_filename=base_ckpt,
@@ -320,6 +333,7 @@ def main(
         checkpoint_every_n_steps=checkpoint_every_n_steps,
         fixed_lambda=fixed_lambda,
         log_every_n_steps=log_every_n_steps,
+        resume_ckpt_path=resume_ckpt_path,
     )
     print("\n[local] Run complete.")
     print(
