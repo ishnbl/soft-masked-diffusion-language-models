@@ -63,6 +63,7 @@ try:
 except Exception:
     pass
 
+
 @app.function(
     image=image,
     gpu="L40S",
@@ -134,17 +135,23 @@ def run_eval(
     print(f"[eval] Running: {' '.join(cmd)}")
     env = os.environ.copy()
     env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-    
+
     try:
         subprocess.run(cmd, check=True, cwd=work_dir, env=env)
     finally:
         data_volume.commit()
 
+
 @app.local_entrypoint()
-def main(checkpoint: str = "mdlm_owt.ckpt", limit_val_batches: str = "1.0", fixed_lambda: float = -1.0, offline: bool = False):
+def main(
+    checkpoint: str = "mdlm_owt.ckpt",
+    limit_val_batches: str = "1.0",
+    fixed_lambda: float = -1.0,
+    offline: bool = False,
+):
     run_eval.remote(
         checkpoint_filename=checkpoint,
         limit_val_batches=limit_val_batches,
         fixed_lambda=fixed_lambda,
-        wandb_offline=offline
+        wandb_offline=offline,
     )
