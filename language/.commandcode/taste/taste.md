@@ -2,6 +2,9 @@
 
 [cmd]: https://commandcode.ai/
 
+# workflow
+- When adding new functionality, create a separate new file rather than modifying existing ones. Confidence: 0.92
+
 # debugging
 - Verify before suggesting deletion of cached/built artifacts — don't assume corruption without confirming the actual cause of the error. Confidence: 0.65
 
