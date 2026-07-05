@@ -93,11 +93,14 @@ class MDLM_SM(MDLM):
   def __init__(self, config, tokenizer):
       super().__init__(config, tokenizer)
       # Initialize transparency head for soft feedback
-      self.tran_head = TransparencyHead(mask_token_id = self.mask_index, 
+      self.tran_head = TransparencyHead(mask_token_id = self.mask_index,
                                 trans_args = config.algo.tran_head)
       if not self.tran_head.learnable:
           for param in self.tran_head.parameters():
               param.requires_grad = False
+      # Realized sm_prob from the most recent training step (for logging
+      # only; plain attr so it never enters state_dict / EMA).
+      self._last_sm_prob = None
 
   def _eval_mode(self):
       self.tran_head.eval()
@@ -170,7 +173,33 @@ class MDLM_SM(MDLM):
       if self.tran_head.last_slerp_angle_mean is not None:
           self.log('transparency/slerp_angle_mean', self.tran_head.last_slerp_angle_mean.item(), on_step=True, on_epoch=False, sync_dist=True)
 
+      # Log the current (possibly ramping) sm_prob gate probability. Set in
+      # `nll()`; deterministic given global_step, so identical on every rank
+      # (no sync needed).
+      if self._last_sm_prob is not None:
+          self.log('transparency/sm_prob', self._last_sm_prob, on_step=True, on_epoch=False, sync_dist=False)
+
       return loss
+
+  def _current_sm_prob(self):
+      """Effective soft-mask gate probability for the CURRENT training step.
+
+      Linearly ramps from 0 at `global_step=0` up to `optim.sm_prob` at
+      `global_step=optim.sm_prob_warmup_steps`, then holds constant at
+      `optim.sm_prob`. `sm_prob_warmup_steps<=0` disables the ramp (returns
+      `optim.sm_prob` unconditionally), which is the default and preserves
+      behavior for any config that doesn't set it.
+
+      This is independent of `algo.tran_head.fixed_lambda` (fixed vs. learnt
+      lambda) — it only decides whether the two-pass soft-mask forward runs
+      at all this step; the transparency head's lambda mode governs how much
+      of the fed-back prediction is mixed in once that gate is open.
+      """
+      target = self.config.optim.sm_prob
+      warmup_steps = getattr(self.config.optim, 'sm_prob_warmup_steps', 0)
+      if warmup_steps and warmup_steps > 0:
+          return target * min(1.0, self.global_step / warmup_steps)
+      return target
 
   def forward(self, xt, sigma, log_p_x0=None):
     """
@@ -244,8 +273,10 @@ class MDLM_SM(MDLM):
         gate_gen = torch.Generator()
         gate_gen.manual_seed(int(self.config.seed) * 1_000_003
                              + int(self.global_step))
+        sm_prob_now = self._current_sm_prob()
+        self._last_sm_prob = sm_prob_now
         sm_gate = (torch.rand(1, generator=gate_gen).item()
-                   < self.config.optim.sm_prob)
+                   < sm_prob_now)
         t_mean = t.mean()
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             t_mean = t_mean.clone()

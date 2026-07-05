@@ -6,7 +6,8 @@
 #
 # Same shape as ../../verda/slurm_train.sbatch, adapted for the from-scratch
 # launchers: no BASE_CKPT (there's nothing to load), and FIXED_LAMBDA /
-# SM_PROB are exposed as knobs since both launchers accept them directly.
+# SM_PROB / SM_PROB_WARMUP_STEPS are exposed as knobs since both launchers
+# accept them directly.
 #
 # Targets ONE node with N GPUs (single-node DDP). Lightning spawns one
 # process per GPU itself, so we use --ntasks=1 and call plain `bash` (via the
@@ -55,6 +56,7 @@ FIXED_LAMBDA="${FIXED_LAMBDA:-}"                     # empty -> learnt lambda; e
 SEED="${SEED:-1}"
 MAX_STEPS="${MAX_STEPS:-5000}"
 SM_PROB="${SM_PROB:-0.8}"
+SM_PROB_WARMUP_STEPS="${SM_PROB_WARMUP_STEPS:-2000}"  # sm_prob ramps 0->SM_PROB over this many steps; 0 disables
 MODEL="${MODEL:-small}"
 DATA="${DATA:-openwebtext-split}"
 GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-512}"
@@ -110,6 +112,7 @@ ARGS=(
   --seed "$SEED"
   --max-steps "$MAX_STEPS"
   --sm-prob "$SM_PROB"
+  --sm-prob-warmup-steps "$SM_PROB_WARMUP_STEPS"
   --model "$MODEL"
   --data "$DATA"
   --global-batch-size "$GLOBAL_BATCH_SIZE"

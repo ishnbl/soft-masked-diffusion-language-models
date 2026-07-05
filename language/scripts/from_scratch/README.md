@@ -55,6 +55,8 @@ but doesn't eliminate it. Watch `transparency/lambda_mean` and
 `transparency/scale` in W&B; if `lambda_mean` flattens near 0, either:
 
 - use `--fixed-lambda` (sidesteps the learned-scale collapse entirely), or
+- raise `--sm-prob-warmup-steps` (default `2000`, see below) so the backbone
+  gets longer to become confident before soft-masking ever engages, or
 - let training run longer — the trap resolves once the backbone's own
   Pass-1 predictions become confident enough to push `scale` back up, or
 - start from the finetune scripts (`../10_slerp_vs_topk_finetune_v2.sh`)
@@ -68,15 +70,26 @@ but doesn't eliminate it. Watch `transparency/lambda_mean` and
   already-trained backbone).
 - `lr_scheduler.num_warmup_steps=2500` by default (the project config
   default for a fresh backbone), vs. `200` in the finetune scripts.
-- `--sm-prob` (default `0.8`) exposes `optim.sm_prob` — the fraction of
-  training steps that run the two-pass soft-mask forward (mask -> Pass 1
-  -> transparency head -> Pass 2). The remaining `1 - sm_prob` steps run a
-  single plain-MDLM forward, which keeps the backbone honest and is also
-  what makes a from-scratch run recover from the cold-start trap above
-  (those steps train the backbone normally regardless of what the head is
-  doing). Lower it to spend more steps on plain MDLM early on if lambda is
-  collapsing; raise it toward `1.0` to weight training more heavily toward
-  the soft-masked objective.
+- `--sm-prob` (default `0.8`) exposes `optim.sm_prob` — the TARGET fraction of
+  training steps that run the two-pass soft-mask forward (mask -> Pass 1 ->
+  transparency head -> Pass 2), once ramped up (see below). The remaining
+  steps run a single plain-MDLM forward, which keeps the backbone honest.
+  Raise it toward `1.0` to weight training more heavily toward the
+  soft-masked objective.
+- `--sm-prob-warmup-steps` (default `2000`) makes `sm_prob` ramp **linearly**
+  from `0` at `global_step=0` up to `--sm-prob` at this step, then hold
+  constant — implemented in `algo.py: MDLM_SM._current_sm_prob()` /
+  `optim.sm_prob_warmup_steps` (project-wide config default `0`, i.e. no
+  ramp, so this only changes behavior where it's explicitly set — these two
+  scripts). This applies identically whether lambda is fixed or learnt: it
+  only decides whether the two-pass soft-mask forward runs *at all* this
+  step, before the transparency head's fixed/learnt lambda logic ever runs.
+  It gives from-scratch training a real warm-up period where the backbone
+  trains as plain MDLM with zero soft-mask interference, which directly
+  helps the cold-start trap below (the noisiest, least-confident phase of
+  training never touches the transparency head at all). Set to `0` to
+  disable the ramp and use `--sm-prob` from step 0, as before. The realized
+  value is logged each step as `transparency/sm_prob` in W&B.
 - `checkpointing.resume_from_ckpt=false` is forced so a stale
   `checkpoints/best.ckpt` sitting in the output dir from a previous run can
   never silently resume instead of starting from a fresh random init.
@@ -117,8 +130,9 @@ sbatch --export=ALL,ALG=topk,FIXED_LAMBDA=0.5,SEED=2,SM_PROB=0.5 \
 ```
 
 Other overridable vars (same `--export=ALL,VAR=...` mechanism): `SEED`,
-`MAX_STEPS`, `MODEL`, `DATA`, `GLOBAL_BATCH_SIZE`, `BATCH_SIZE`, `DATA_DIR`,
-`OUT_DIR`, `ENV_NAME`, `CONDA_HOME`, `WANDB_MODE`.
+`MAX_STEPS`, `SM_PROB_WARMUP_STEPS` (default `2000`), `MODEL`, `DATA`,
+`GLOBAL_BATCH_SIZE`, `BATCH_SIZE`, `DATA_DIR`, `OUT_DIR`, `ENV_NAME`,
+`CONDA_HOME`, `WANDB_MODE`.
 
 Notes specific to the SLURM path:
 

@@ -45,8 +45,13 @@
 #   --val-check-interval    500
 #   --warmup-steps          2500  (config default — a fresh backbone needs the
 #                                  full warmup, unlike finetune's 200)
-#   --sm-prob               0.8   (fraction of steps that run the two-pass
-#                                  soft-mask forward; the rest are plain MDLM)
+#   --sm-prob               0.8   (TARGET fraction of steps that run the
+#                                  two-pass soft-mask forward once ramped up;
+#                                  the rest are plain MDLM)
+#   --sm-prob-warmup-steps  2000  (sm_prob ramps LINEARLY from 0 at step 0 up
+#                                  to --sm-prob at this step, then holds
+#                                  constant; set to 0 to disable the ramp and
+#                                  use --sm-prob from step 0, as before)
 #   --data-dir              /workspace/data
 #   --out-dir               /workspace/outputs
 #   --fixed-lambda          -1.0  (disabled by default -> learned entropy-gated
@@ -81,6 +86,7 @@ LOG_EVERY=3
 VAL_CHECK_INTERVAL=500
 WARMUP_STEPS=2500
 SM_PROB=0.8
+SM_PROB_WARMUP_STEPS=2000
 DATA_DIR="/workspace/data"
 OUT_DIR="/workspace/outputs"
 FIXED_LAMBDA=-1.0
@@ -103,6 +109,7 @@ while [[ $# -gt 0 ]]; do
     --val-check-interval)  VAL_CHECK_INTERVAL="$2";   shift 2 ;;
     --warmup-steps)        WARMUP_STEPS="$2";         shift 2 ;;
     --sm-prob)             SM_PROB="$2";              shift 2 ;;
+    --sm-prob-warmup-steps) SM_PROB_WARMUP_STEPS="$2"; shift 2 ;;
     --data-dir)            DATA_DIR="$2";             shift 2 ;;
     --out-dir)             OUT_DIR="$2";              shift 2 ;;
     --fixed-lambda)        FIXED_LAMBDA="$2";         shift 2 ;;
@@ -163,7 +170,11 @@ echo " Per-GPU batch: $BATCH_SIZE"
 echo " Accum steps:   $ACCUM"
 echo " Global batch:  $GLOBAL_BATCH_SIZE"
 echo " Max steps:     $MAX_STEPS"
-echo " sm_prob:       $SM_PROB"
+if [ "$SM_PROB_WARMUP_STEPS" -gt 0 ] 2>/dev/null; then
+  echo " sm_prob:       0 -> $SM_PROB linearly over $SM_PROB_WARMUP_STEPS steps"
+else
+  echo " sm_prob:       $SM_PROB (no ramp)"
+fi
 echo " Backbone init: random (no checkpoint loaded)"
 echo " Output dir:    $RUN_OUT_DIR"
 if python -c "import sys; sys.exit(0 if float('${FIXED_LAMBDA}') >= 0.0 else 1)" 2>/dev/null; then
@@ -209,6 +220,7 @@ CMD=(
   optim.lr=3e-4
   optim.tran_head_lr=0.01
   optim.sm_prob="${SM_PROB}"
+  optim.sm_prob_warmup_steps="${SM_PROB_WARMUP_STEPS}"
   optim.sm_t_min=0.2
   optim.sm_t_max=0.8
   lr_scheduler.num_warmup_steps="${WARMUP_STEPS}"

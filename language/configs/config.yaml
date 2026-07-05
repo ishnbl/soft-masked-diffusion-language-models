@@ -67,6 +67,15 @@ optim:
   lr: 3e-4
   tran_head_lr: 1e-3
   sm_prob: 0.5
+  # If > 0, the effective soft-mask gate probability ramps LINEARLY from 0 at
+  # global_step=0 up to `sm_prob` at global_step=sm_prob_warmup_steps, then
+  # holds constant at `sm_prob`. 0 (default) disables the ramp entirely, so
+  # `sm_prob` is used as-is from step 0 — this preserves existing behavior
+  # for any recipe that doesn't set this. Applies identically regardless of
+  # algo.tran_head.fixed_lambda (fixed or learnt) — it only gates whether the
+  # two-pass soft-mask forward runs at all, independent of the transparency
+  # head's lambda mode. See MDLM_SM._current_sm_prob in algo.py.
+  sm_prob_warmup_steps: 0
   # Soft-masking is only applied for timesteps inside [sm_t_min, sm_t_max],
   # matching the original soft-masking paper (feedback is skipped near t=0,
   # where the input is already clean, and near t=1, where it is uninformative).
