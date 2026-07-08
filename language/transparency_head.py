@@ -154,9 +154,9 @@ class TransparencyHead(nn.Module):
 
         # Realized interpolation stats from the most recent forward (for logging
         # only; plain attrs so they never enter state_dict / EMA).
-        self.last_lambda_mean = None
-        self.last_lambda_std = None
-        self.last_slerp_angle_mean = None
+        self.last_lambda_mean = torch.tensor(float(self.fixed_lambda)) if self.fixed_lambda is not None else torch.tensor(0.0)
+        self.last_lambda_std = torch.tensor(0.0)
+        self.last_slerp_angle_mean = torch.tensor(0.0)
 
     @property
     def scale(self):
@@ -184,7 +184,7 @@ class TransparencyHead(nn.Module):
         return neg_entropy, p
 
 
-    def calculate_lambda_tensor(self, neg_entropy, mask_positions):
+    def calculate_lambda_tensor(self, neg_entropy, mask_positions, current_nll=None, initial_nll=None):
         """Calculate lambda tensor from negative entropy"""
         if self.fixed_lambda is not None:
             lambda_tensor = torch.full_like(
@@ -203,7 +203,14 @@ class TransparencyHead(nn.Module):
             )
         
         lambda_tensor = neg_entropy
-        lambda_tensor = self.scale * torch.sigmoid(self.steepness * (lambda_tensor - self.centre))
+        
+        centre = self.centre
+        if current_nll is not None and initial_nll is not None and initial_nll > 0:
+            centre = self.centre * (current_nll / initial_nll)
+            
+        self.last_effective_centre = centre.detach()
+            
+        lambda_tensor = self.scale * torch.sigmoid(self.steepness * (lambda_tensor - centre))
         
         # apply only on mask positions
         lambda_tensor = torch.where(mask_positions, lambda_tensor,
@@ -211,7 +218,7 @@ class TransparencyHead(nn.Module):
         return lambda_tensor
 
     
-    def forward(self, input_ids, logits_prelim, embedding_matrix=None):
+    def forward(self, input_ids, logits_prelim, embedding_matrix=None, current_nll=None, initial_nll=None):
 
         # --- 1. Get Entropy and Lambda ---
         temperature = self.temperature if self.transparency_alg == "mixinputs_with_temp" else 1.0
@@ -238,7 +245,7 @@ class TransparencyHead(nn.Module):
                 neg_entropy = logits_prelim.new_zeros(input_ids.shape)
                 p_full = None
 
-        lambda_tensor = self.calculate_lambda_tensor(neg_entropy, mask_positions)
+        lambda_tensor = self.calculate_lambda_tensor(neg_entropy, mask_positions, current_nll, initial_nll)
         # AFTER- changed
         lambda_tensor = lambda_tensor.unsqueeze(-1)  # (B, T, 1)
 

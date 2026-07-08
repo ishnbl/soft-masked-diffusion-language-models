@@ -101,6 +101,11 @@ class MDLM_SM(MDLM):
       # Realized sm_prob from the most recent training step (for logging
       # only; plain attr so it never enters state_dict / EMA).
       self._last_sm_prob = None
+      self._last_slerp_norm = None
+      self._last_standard_norm = None
+      
+      self.register_buffer("initial_nll", torch.tensor(-1.0))
+      self.register_buffer("current_nll_ema", torch.tensor(-1.0))
 
   def _eval_mode(self):
       self.tran_head.eval()
@@ -161,17 +166,24 @@ class MDLM_SM(MDLM):
 
       # Log the learnable transparency parameters.
       self.log('transparency/scale', self.tran_head.scale.item(), on_step=True, on_epoch=False, sync_dist=False)
-      self.log('transparency/centre', self.tran_head.centre.item(), on_step=True, on_epoch=False, sync_dist=False)
+      if hasattr(self.tran_head, 'last_effective_centre') and self.tran_head.last_effective_centre is not None:
+          self.log('transparency/centre', self.tran_head.last_effective_centre.item(), on_step=True, on_epoch=False, sync_dist=False)
+      else:
+          self.log('transparency/centre', self.tran_head.centre.item(), on_step=True, on_epoch=False, sync_dist=False)
       self.log('transparency/steepness', self.tran_head.steepness.item(), on_step=True, on_epoch=False, sync_dist=False)
       self.log('transparency/temperature', self.tran_head.temperature.item(), on_step=True, on_epoch=False, sync_dist=False)
 
       # Log the realized interpolation behavior (set during the head's forward).
       if self.tran_head.last_lambda_mean is not None:
-          self.log('transparency/lambda_mean', self.tran_head.last_lambda_mean.item(), on_step=True, on_epoch=False, sync_dist=True)
+          self.log('transparency/lambda_mean', self.tran_head.last_lambda_mean.item(), on_step=True, on_epoch=False, sync_dist=False)
       if self.tran_head.last_lambda_std is not None:
-          self.log('transparency/lambda_std', self.tran_head.last_lambda_std.item(), on_step=True, on_epoch=False, sync_dist=True)
+          self.log('transparency/lambda_std', self.tran_head.last_lambda_std.item(), on_step=True, on_epoch=False, sync_dist=False)
       if self.tran_head.last_slerp_angle_mean is not None:
-          self.log('transparency/slerp_angle_mean', self.tran_head.last_slerp_angle_mean.item(), on_step=True, on_epoch=False, sync_dist=True)
+          self.log('transparency/slerp_angle_mean', self.tran_head.last_slerp_angle_mean.item(), on_step=True, on_epoch=False, sync_dist=False)
+      if self._last_slerp_norm is not None:
+          self.log('transparency/slerp_embedding_norm', self._last_slerp_norm.item(), on_step=True, on_epoch=False, sync_dist=False)
+      if self._last_standard_norm is not None:
+          self.log('transparency/standard_embedding_norm', self._last_standard_norm.item(), on_step=True, on_epoch=False, sync_dist=False)
 
       # Log the current (possibly ramping) sm_prob gate probability. Set in
       # `nll()`; deterministic given global_step, so identical on every rank
@@ -218,16 +230,23 @@ class MDLM_SM(MDLM):
     with torch.cuda.amp.autocast(dtype=torch.float32):
       if log_p_x0 is not None:
           # If previous predictions are available, create a soft-masked input
+          current_nll_val = self.current_nll_ema.item() if hasattr(self, 'current_nll_ema') and self.current_nll_ema.item() >= 0 else None
+          initial_nll_val = self.initial_nll.item() if hasattr(self, 'initial_nll') and self.initial_nll.item() >= 0 else None
+          
           if self.tran_head.transparency_alg == "slerp_sm":
               # SLERP feedback works in embedding space and returns inputs_embeds
               # directly (B,T,D); the DIT embedding layer passes these through.
               embedding_matrix = self.backbone.vocab_embed.embedding
-              p_x0_sm = self.tran_head(xt, log_p_x0, embedding_matrix=embedding_matrix)
+              p_x0_sm = self.tran_head(xt, log_p_x0, embedding_matrix=embedding_matrix, 
+                                       current_nll=current_nll_val, initial_nll=initial_nll_val)
+              self._last_slerp_norm = p_x0_sm.norm(dim=-1).mean().detach()
           else:
-              p_x0_sm = self.tran_head(xt, log_p_x0)
+              p_x0_sm = self.tran_head(xt, log_p_x0, 
+                                       current_nll=current_nll_val, initial_nll=initial_nll_val)
           model_output = self.backbone(p_x0_sm, sigma=sigma_processed)
       else:
           # Standard forward pass if no previous prediction is available
+          self._last_standard_norm = self.backbone.vocab_embed.embedding[xt].norm(dim=-1).mean().detach()
           model_output = self.backbone(xt, sigma=sigma_processed)
 
     return self._process_model_output(model_output=model_output, xt=xt, sigma=sigma)
@@ -311,6 +330,15 @@ class MDLM_SM(MDLM):
           alpha_t=alpha_t,
           dalpha_t=dalpha_t,
           low_var=train_mode and self.loss_type == 'low_var')
+          
+    if train_mode:
+        loss_val = loss.detach().mean()
+        if self.initial_nll.item() < 0:
+            self.initial_nll.copy_(loss_val)
+            self.current_nll_ema.copy_(loss_val)
+        else:
+            self.current_nll_ema.copy_(0.99 * self.current_nll_ema + 0.01 * loss_val)
+            
     return loss
     
   def generate_samples(self, num_samples, num_steps=None, eps=1e-5):
