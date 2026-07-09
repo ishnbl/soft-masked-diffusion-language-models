@@ -6,7 +6,7 @@ This repository hosts the official implementation of two papers on Soft-Masked D
 2. **Lost in Interpolation: Why Predictive Feedback Fails in Diffusion Language Models (COLM 2026)**
 
 <div align="center">
-  <img src='./assets/architecture.png' width="90%"/>
+  <img src='./assets/slerp_vs_lerp.png' width="90%"/>
 </div>
 
 ---
