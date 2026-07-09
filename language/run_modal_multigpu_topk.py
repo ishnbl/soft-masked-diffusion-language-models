@@ -136,8 +136,8 @@ def train_mg_topk(
     fixed_lambda: float = -1.0,
     log_every_n_steps: int = 3,
 ):
-    import subprocess
     import shutil
+    import subprocess
 
     import torch
 

@@ -1,5 +1,6 @@
 import torch
 
+
 def get_batch_seed(batch):
     """
     Extract the seed from the first item in the batch if it exists.
@@ -8,6 +9,7 @@ def get_batch_seed(batch):
         return batch[0]["seed"].item()
     return None
 
+
 def get_batch_seed_collated(batch):
     """
     Extract the seed from the first item in the batch if it exists.
@@ -15,6 +17,7 @@ def get_batch_seed_collated(batch):
     if "seed" in batch:
         return batch["seed"][0].item()
     return None
+
 
 def seeded_rand(shape, device, seed=None):
     """
@@ -25,6 +28,7 @@ def seeded_rand(shape, device, seed=None):
         g.manual_seed(int(seed))
         return torch.rand(shape, generator=g, device=device)
     return torch.rand(shape, device=device)
+
 
 def seeded_randint(high: int, size, device, seed=None):
     """

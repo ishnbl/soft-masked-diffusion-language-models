@@ -80,6 +80,7 @@ when `--hf-repo` is set and the file is missing from the volume):
 
 import os
 import sys
+
 import modal
 
 # ── volumes (persistent across runs) ─────────────────────────────────────────
@@ -98,11 +99,13 @@ OUT_DIR = "/vol/outputs"
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git", "curl", "patch", "git-lfs")
-    .env({
-        # Enable hf_transfer's rust backend so the multi-GB ckpt download via
-        # huggingface_hub.snapshot_download finishes quickly.
-        "HF_HUB_ENABLE_HF_TRANSFER": "1",
-    })
+    .env(
+        {
+            # Enable hf_transfer's rust backend so the multi-GB ckpt download via
+            # huggingface_hub.snapshot_download finishes quickly.
+            "HF_HUB_ENABLE_HF_TRANSFER": "1",
+        }
+    )
     .pip_install(
         "numpy<2",
         "datasets==2.15.0",
@@ -190,8 +193,8 @@ def run_mauve(
     hf_revision: str = "main",
     hf_token: str = "",  # optional; pass `hf_*****` for gated repos
 ):
-    import subprocess
     import shutil
+    import subprocess
 
     if algo not in ("mdlm", "mdlm_sm"):
         raise ValueError(f"algo must be 'mdlm' or 'mdlm_sm', got {algo!r}")
@@ -235,8 +238,10 @@ def run_mauve(
         # this runner is wired against, so refuse to silently 404 on the
         # base name. Users wanting the public base ckpt should use the
         # upstream MDLM release on HF and pass --hf-repo accordingly.
-        if checkpoint_filename == "mdlm_owt.ckpt" and \
-                hf_repo == "lavanyanigam/soft-masking-checkpoints":
+        if (
+            checkpoint_filename == "mdlm_owt.ckpt"
+            and hf_repo == "lavanyanigam/soft-masking-checkpoints"
+        ):
             raise FileNotFoundError(
                 f"{checkpoint_filename!r} is not in {hf_repo}. "
                 f"Upload it via `modal volume put mdlm-checkpoints ...` "
@@ -244,18 +249,17 @@ def run_mauve(
             )
 
         download_volume = (
-            ckpt_volume if checkpoint_filename == "mdlm_owt.ckpt"
-            else out_volume
+            ckpt_volume if checkpoint_filename == "mdlm_owt.ckpt" else out_volume
         )
-        local_dir = (
-            CKPT_DIR if checkpoint_filename == "mdlm_owt.ckpt" else OUT_DIR
-        )
+        local_dir = CKPT_DIR if checkpoint_filename == "mdlm_owt.ckpt" else OUT_DIR
         os.makedirs(local_dir, exist_ok=True)
 
         # hf_transfer (set via the image env) speeds up multi-GB ckpt pulls
         # via the rust backend.
-        print(f"[hf] Missing locally; downloading {checkpoint_filename} "
-              f"from {hf_repo}@{hf_revision} into {local_dir} ...")
+        print(
+            f"[hf] Missing locally; downloading {checkpoint_filename} "
+            f"from {hf_repo}@{hf_revision} into {local_dir} ..."
+        )
         downloaded = snapshot_download(
             repo_id=hf_repo,
             revision=hf_revision,
@@ -399,9 +403,11 @@ def run_mauve(
         print(f"[mauve] SLERP iterations: {slerp_n_iter}")
 
     print(f"[mauve] algo={algo} sampler={sampler} ckpt={checkpoint_filename}")
-    print(f"[mauve] num_sample_batches={num_sample_batches} "
-          f"eval_batch_size={eval_batch_size} seq_len={seq_len} "
-          f"steps={sampling_steps} p_nucleus={p_nucleus}")
+    print(
+        f"[mauve] num_sample_batches={num_sample_batches} "
+        f"eval_batch_size={eval_batch_size} seq_len={seq_len} "
+        f"steps={sampling_steps} p_nucleus={p_nucleus}"
+    )
     if sampler.startswith("remdm"):
         print(
             f"[mauve] remdm params: eta={eta} t_on={t_on} t_off={t_off} "

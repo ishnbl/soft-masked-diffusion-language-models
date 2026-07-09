@@ -133,8 +133,8 @@ def train_mg(
     log_every_n_steps: int = 3,
     resume_ckpt_path: str = "",
 ):
-    import subprocess
     import shutil
+    import subprocess
 
     import torch
 
