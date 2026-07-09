@@ -270,7 +270,6 @@ class TransparencyHead(nn.Module):
 
         if self.transparency_alg == "mixinputs_with_topk":
             # GATHER: Select only the logits for masked positions
-            #masked_logits = logits_prelim[mask_positions]
             
             if masked_logits.shape[0] > 0:
                 # COMPUTE: Get top-k indices and probs for masked items

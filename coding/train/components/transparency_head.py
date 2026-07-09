@@ -251,6 +251,4 @@ def get_th_kwargs(model, verbose=False):
         "slerp_n_iter": th.slerp_n_iter,
         "transparency_scheduling": "none",  # we dont train with time_dependence
     }
-    # if verbose:
-    #     print(f"Transparency head params: {th_params}", flush=True)
     return th_params

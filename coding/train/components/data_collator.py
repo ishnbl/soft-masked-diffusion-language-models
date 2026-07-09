@@ -125,8 +125,6 @@ class dLLMDataCollator(DefaultDataCollator):
 
         batch = super().__call__(features)
 
-        # print("ORIG INPUTS ============", self.tokenizer.decode(batch["input_ids"][0], skip_special_tokens=False))
-
         noisy_batch, labels, mask_indices, p_mask, dsigma = self.forward_process(batch, batch_seed)
         labels, noisy_batch, mask_indices = self.add_at_least_one_mask(
             labels, noisy_batch, batch["prompt_lengths"].long(), mask_indices, batch_seed)
@@ -139,6 +137,4 @@ class dLLMDataCollator(DefaultDataCollator):
             "dsigma": dsigma,              # scalar weighting = 1/t
         })
 
-        # print("p_mask:", p_mask.item(), "dsigma:", dsigma.item())
-        # print("MASKED INPUTS ============", self.tokenizer.decode(batch["input_ids"][0], skip_special_tokens=False))
         return batch
