@@ -67,14 +67,14 @@ set -euo pipefail
 # ── Defaults ─────────────────────────────────────────────────
 NUM_GPUS=2
 SEED=1
-MAX_STEPS=5000
+MAX_STEPS=-1
 MODEL="small"
 DATA="openwebtext-split"
 SLERP_N_ITER=3
 GLOBAL_BATCH_SIZE=512
 BATCH_SIZE=16
 NUM_WORKERS=4
-CHECKPOINT_EVERY=100
+CHECKPOINT_EVERY=500
 LOG_EVERY=3
 VAL_CHECK_INTERVAL=500
 WARMUP_STEPS=2500
@@ -83,6 +83,7 @@ SM_PROB_WARMUP_STEPS=2000
 DATA_DIR="/workspace/data"
 OUT_DIR="/workspace/outputs"
 FIXED_LAMBDA=-1.0
+INIT_CENTRE=-2.5
 
 # ── Parse arguments ───────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -105,9 +106,15 @@ while [[ $# -gt 0 ]]; do
     --data-dir)            DATA_DIR="$2";             shift 2 ;;
     --out-dir)             OUT_DIR="$2";              shift 2 ;;
     --fixed-lambda)        FIXED_LAMBDA="$2";         shift 2 ;;
+    --init-centre)         INIT_CENTRE="$2";          shift 2 ;;
+    --resume-from-ckpt)    RESUME_FROM_CKPT="$2";     shift 2 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
+
+if [[ -z "${RESUME_FROM_CKPT:-}" ]]; then
+  RESUME_FROM_CKPT="false"
+fi
 
 # ── Preflight checks ─────────────────────────────────────────
 if ! python -c "import torch; assert torch.cuda.is_available(), 'No CUDA'" 2>/dev/null; then
@@ -148,8 +155,8 @@ fi
 # ── Directories ───────────────────────────────────────────────
 mkdir -p "$DATA_DIR/owt_cache" "$OUT_DIR"
 
-GROUP="scratch_slerp_${NUM_GPUS}gpu_${MODEL}_${DATA}_seed${SEED}"
-RUN_NAME="scratch-slerp-${NUM_GPUS}gpu-${MODEL}-${DATA}-seed${SEED}"
+GROUP="scratch_slerp_${NUM_GPUS}gpu_${MODEL}_${DATA}_seed${SEED}_sm${SM_PROB}_lam${FIXED_LAMBDA}"
+RUN_NAME="scratch-slerp-${NUM_GPUS}gpu-${MODEL}-${DATA}-seed${SEED}-sm${SM_PROB}-lam${FIXED_LAMBDA}"
 RUN_OUT_DIR="${OUT_DIR}/${GROUP}"
 mkdir -p "$RUN_OUT_DIR"
 
@@ -193,7 +200,7 @@ CMD=(
   algo.tran_head.slerp_n_iter="${SLERP_N_ITER}"
   algo.tran_head.mixinputs_k=3
   algo.tran_head.init_scale=0.5
-  algo.tran_head.init_centre=-2.5
+  algo.tran_head.init_centre="${INIT_CENTRE}"
   model="${MODEL}"
   data="${DATA}"
   data.cache_dir="${DATA_DIR}/owt_cache"
@@ -221,10 +228,12 @@ CMD=(
   sampling.predictor=sm
   eval.compute_generative_perplexity=False
   eval.generate_samples=False
-  checkpointing.resume_from_ckpt=false
+  checkpointing.resume_from_ckpt="${RESUME_FROM_CKPT}"
+  checkpointing.resume_ckpt_path="${RUN_OUT_DIR}/checkpoints/last.ckpt"
   callbacks.checkpoint_every_n_steps.every_n_train_steps="${CHECKPOINT_EVERY}"
   wandb.group="${GROUP}"
   wandb.name="${RUN_NAME}"
+  ${WANDB_PROJECT:+wandb.project="${WANDB_PROJECT}"}
   ++hydra.run.dir="${RUN_OUT_DIR}"
   ++checkpointing.save_dir="${RUN_OUT_DIR}"
 )
