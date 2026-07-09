@@ -85,11 +85,18 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ── Preflight checks ─────────────────────────────────────────
-if [ ! -f "$BASE_CKPT" ]; then
-  echo "ERROR: Checkpoint not found at $BASE_CKPT"
-  echo "Download it from Google Drive and place it at $BASE_CKPT"
-  echo "  (or pass --base-ckpt /your/actual/path/mdlm_owt.ckpt)"
-  exit 1
+FINETUNE_VAL="${BASE_CKPT}"
+if [ "$BASE_CKPT" = "none" ]; then
+  FINETUNE_VAL=""
+fi
+
+if [ -n "$FINETUNE_VAL" ]; then
+  if [ ! -f "$FINETUNE_VAL" ]; then
+    echo "ERROR: Checkpoint not found at $FINETUNE_VAL"
+    echo "Download it from Google Drive and place it at $FINETUNE_VAL"
+    echo "  (or pass --base-ckpt /your/actual/path/mdlm_owt.ckpt)"
+    exit 1
+  fi
 fi
 
 if ! python -c "import torch; assert torch.cuda.is_available(), 'No CUDA'" 2>/dev/null; then
@@ -198,7 +205,7 @@ CMD=(
   sampling.predictor=sm
   eval.compute_generative_perplexity=False
   eval.generate_samples=False
-  training.finetune_path="${BASE_CKPT}"
+  training.finetune_path="${FINETUNE_VAL}"
   checkpointing.resume_from_ckpt=false
   callbacks.checkpoint_every_n_steps.every_n_train_steps="${CHECKPOINT_EVERY}"
   callbacks.checkpoint_monitor=null
