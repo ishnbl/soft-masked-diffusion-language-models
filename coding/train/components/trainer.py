@@ -134,17 +134,23 @@ class dLLMTrainer(Trainer):
         if self.data_collator.softmasking and "transparency_scale" in th_kwargs.keys():
             # If softmasking, we log the transparency params
             with torch.no_grad():
-                logs.update({
-                    "transparency/scale":  th_kwargs["transparency_scale"],
-                    "transparency/centre": th_kwargs["transparency_centre"],
-                    "transparency/steep":  th_kwargs["transparency_steepness"],
-                    "transparency/temperature": th_kwargs["mixture_temp"],
-                })
+                logs.update(
+                    {
+                        "transparency/scale": th_kwargs["transparency_scale"],
+                        "transparency/centre": th_kwargs["transparency_centre"],
+                        "transparency/steep": th_kwargs["transparency_steepness"],
+                        "transparency/temperature": th_kwargs["mixture_temp"],
+                    }
+                )
                 if th_module is not None:
                     if getattr(th_module, "last_lambda_mean", None) is not None:
-                        logs["transparency/lambda_mean"] = th_module.last_lambda_mean.item()
+                        logs["transparency/lambda_mean"] = (
+                            th_module.last_lambda_mean.item()
+                        )
                     if getattr(th_module, "last_lambda_std", None) is not None:
-                        logs["transparency/lambda_std"] = th_module.last_lambda_std.item()
+                        logs["transparency/lambda_std"] = (
+                            th_module.last_lambda_std.item()
+                        )
 
             self.log(logs)
 

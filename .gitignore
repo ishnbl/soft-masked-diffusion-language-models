@@ -207,3 +207,8 @@ language/patches/modified/*
 *.ckpt
 *.pt
 *.bin
+
+# Local checkpoint and logs
+mdlm.ckpt
+language/.hydra/
+language/outputs/
