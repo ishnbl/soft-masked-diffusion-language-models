@@ -213,6 +213,8 @@ CMD=(
   callbacks.checkpoint_monitor=null
   wandb.group="${GROUP}"
   wandb.name="${RUN_NAME}"
+  wandb.project="pretraining"
+  ++wandb.entity="slerp-on-smdlm"
   ++hydra.run.dir="${RUN_OUT_DIR}"
   ++checkpointing.save_dir="${RUN_OUT_DIR}"
 )

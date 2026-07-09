@@ -102,7 +102,8 @@ trainer:
   val_check_interval: 5000
 
 wandb:
-  project: sm-mdlm
+  project: pretraining
+  entity: slerp-on-smdlm
   notes: Soft Masking MDLM
   group: null
   job_type: null
