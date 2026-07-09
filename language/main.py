@@ -133,7 +133,10 @@ def _eval_ppl(diffusion_model, config, logger, tokenizer):
     callbacks = []
     if "callbacks" in config:
         for _, callback in config.callbacks.items():
-            callbacks.append(hydra.utils.instantiate(callback))
+            if callback is not None:
+                instantiated = hydra.utils.instantiate(callback)
+                if instantiated is not None:
+                    callbacks.append(instantiated)
     trainer = hydra.utils.instantiate(
         config.trainer,
         default_root_dir=os.getcwd(),
@@ -173,7 +176,10 @@ def _train(diffusion_model, config, logger, tokenizer):
     callbacks = []
     if "callbacks" in config:
         for _, callback in config.callbacks.items():
-            callbacks.append(hydra.utils.instantiate(callback))
+            if callback is not None:
+                instantiated = hydra.utils.instantiate(callback)
+                if instantiated is not None:
+                    callbacks.append(instantiated)
 
     train_ds, valid_ds = dataloader.get_dataloaders(config, tokenizer)
 

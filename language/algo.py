@@ -105,6 +105,7 @@ class MDLM_SM(MDLM):
 
         self.register_buffer("initial_nll", torch.tensor(-1.0))
         self.register_buffer("current_nll_ema", torch.tensor(-1.0))
+        self.register_buffer("R_ema", torch.tensor(-1.0))
 
     def _eval_mode(self):
         self.tran_head.eval()
@@ -261,7 +262,41 @@ class MDLM_SM(MDLM):
                 sync_dist=False,
             )
 
+        if getattr(self.config.algo.tran_head, "reliability_conditioned", False):
+            self.log(
+                "transparency/reliability_ema",
+                self.R_ema.item(),
+                on_step=True,
+                on_epoch=False,
+                sync_dist=False,
+            )
+            self.log(
+                "transparency/reliability_multiplier",
+                self._get_reliability_multiplier(),
+                on_step=True,
+                on_epoch=False,
+                sync_dist=False,
+            )
+
         return loss
+
+    def _get_reliability_multiplier(self):
+        if not getattr(self.config.algo.tran_head, "reliability_conditioned", False):
+            return 1.0
+        
+        r_ema = self.R_ema.item()
+        if r_ema < 0:
+            return 0.0
+            
+        r_start = getattr(self.config.algo.tran_head, "reliability_start", 0.05)
+        r_full = getattr(self.config.algo.tran_head, "reliability_full", 0.25)
+        
+        if r_full <= r_start:
+            return 1.0
+            
+        u = max(0.0, min(1.0, (r_ema - r_start) / (r_full - r_start)))
+        r = u * u * (3.0 - 2.0 * u)
+        return r
 
     def _current_sm_prob(self):
         """Effective soft-mask gate probability for the CURRENT training step.
@@ -278,6 +313,10 @@ class MDLM_SM(MDLM):
         of the fed-back prediction is mixed in once that gate is open.
         """
         target = self.config.optim.sm_prob
+        if getattr(self.config.algo.tran_head, "reliability_conditioned", False):
+            r = self._get_reliability_multiplier()
+            target = target * r
+
         warmup_steps = getattr(self.config.optim, "sm_prob_warmup_steps", 0)
         if warmup_steps and warmup_steps > 0:
             return target * min(1.0, self.global_step / warmup_steps)
@@ -312,6 +351,8 @@ class MDLM_SM(MDLM):
                     else None
                 )
 
+                r_val = self._get_reliability_multiplier() if self.training else 1.0
+
                 if self.tran_head.transparency_alg == "slerp_sm":
                     # SLERP feedback works in embedding space and returns inputs_embeds
                     # directly (B,T,D); the DIT embedding layer passes these through.
@@ -322,6 +363,7 @@ class MDLM_SM(MDLM):
                         embedding_matrix=embedding_matrix,
                         current_nll=current_nll_val,
                         initial_nll=initial_nll_val,
+                        r_multiplier=r_val,
                     )
                     self._last_slerp_norm = p_x0_sm.norm(dim=-1).mean().detach()
                 else:
@@ -330,6 +372,7 @@ class MDLM_SM(MDLM):
                         log_p_x0,
                         current_nll=current_nll_val,
                         initial_nll=initial_nll_val,
+                        r_multiplier=r_val,
                     )
                 model_output = self.backbone(p_x0_sm, sigma=sigma_processed)
             else:
@@ -404,11 +447,13 @@ class MDLM_SM(MDLM):
             # the full backward graph for a forward whose output is only used as data.
             with torch.no_grad():
                 log_x_theta_pass1 = self.forward(xt, sigma=sigma)
+            log_x_theta_for_reliability = log_x_theta_pass1
             # Pass 2: Main pass that computes the gradients.
             log_x_theta = self.forward(xt, sigma=sigma, log_p_x0=log_x_theta_pass1)
         else:
             # --- Standard Path (gate off, or batch is out of band) ---
             log_x_theta = self.forward(xt, sigma=sigma)
+            log_x_theta_for_reliability = log_x_theta
 
         utils.print_nans(log_x_theta, "model_output")
 
@@ -430,6 +475,42 @@ class MDLM_SM(MDLM):
                 self.current_nll_ema.copy_(
                     0.99 * self.current_nll_ema + 0.01 * loss_val
                 )
+
+            # Update Reliability Schedule if enabled
+            if getattr(self.config.algo.tran_head, "reliability_conditioned", False):
+                reliability_beta = getattr(self.config.algo.tran_head, "reliability_beta", 0.99)
+                mask_pos = (xt == self.mask_index)
+                num_masked = mask_pos.sum()
+                
+                # Compute correct log-probabilities and probabilities
+                log_p_theta = torch.gather(
+                    input=log_x_theta_for_reliability.detach(), dim=-1, index=x0[:, :, None]
+                ).squeeze(-1)
+                p_theta = torch.exp(log_p_theta)
+                sum_p_theta = p_theta[mask_pos].sum() if num_masked > 0 else torch.tensor(0.0, device=p_theta.device)
+                
+                if torch.distributed.is_available() and torch.distributed.is_initialized():
+                    stats = torch.stack([sum_p_theta, num_masked.float().to(sum_p_theta.device)])
+                    torch.distributed.all_reduce(stats, op=torch.distributed.ReduceOp.SUM)
+                    sum_p_theta_all = stats[0]
+                    num_masked_all = stats[1]
+                    if num_masked_all > 0:
+                        R_batch = sum_p_theta_all / num_masked_all
+                    else:
+                        R_batch = torch.tensor(0.0, device=p_theta.device)
+                else:
+                    if num_masked > 0:
+                        R_batch = sum_p_theta / num_masked
+                    else:
+                        R_batch = torch.tensor(0.0, device=p_theta.device)
+                
+                # Update R_ema
+                if self.R_ema.item() < 0:
+                    self.R_ema.copy_(R_batch)
+                else:
+                    self.R_ema.copy_(
+                        reliability_beta * self.R_ema + (1.0 - reliability_beta) * R_batch
+                    )
 
         return loss
 

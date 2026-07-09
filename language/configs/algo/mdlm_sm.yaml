@@ -21,3 +21,9 @@ tran_head:
   learnable: true
   # Optional fixed lambda override in [0, 1]. null keeps the learned schedule.
   fixed_lambda: null
+  # Reliability-conditioned schedule config
+  reliability_conditioned: false
+  reliability_beta: 0.99
+  reliability_start: 0.05
+  reliability_full: 0.25
+

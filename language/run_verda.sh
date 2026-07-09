@@ -189,6 +189,7 @@ CMD=(
   training.finetune_path="${BASE_CKPT}"
   checkpointing.resume_from_ckpt=false
   callbacks.checkpoint_every_n_steps.every_n_train_steps="${CHECKPOINT_EVERY}"
+  callbacks.checkpoint_monitor=null
   wandb.group="${GROUP}"
   wandb.name="${RUN_NAME}"
   ++hydra.run.dir="${RUN_OUT_DIR}"

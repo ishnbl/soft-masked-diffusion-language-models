@@ -201,12 +201,15 @@ class TransparencyHead(nn.Module):
         return neg_entropy, p
 
     def calculate_lambda_tensor(
-        self, neg_entropy, mask_positions, current_nll=None, initial_nll=None
+        self, neg_entropy, mask_positions, current_nll=None, initial_nll=None, r_multiplier=None
     ):
         """Calculate lambda tensor from negative entropy"""
         if self.fixed_lambda is not None:
+            val = self.fixed_lambda
+            if r_multiplier is not None:
+                val = val * r_multiplier
             lambda_tensor = torch.full_like(
-                mask_positions, fill_value=self.fixed_lambda, dtype=torch.float32
+                mask_positions, fill_value=val, dtype=torch.float32
             ).to(dtype=self.raw_scale.dtype)
             lambda_tensor = torch.where(
                 mask_positions, lambda_tensor, torch.zeros_like(lambda_tensor)
@@ -245,6 +248,7 @@ class TransparencyHead(nn.Module):
         embedding_matrix=None,
         current_nll=None,
         initial_nll=None,
+        r_multiplier=None,
     ):
 
         # --- 1. Get Entropy and Lambda ---
@@ -277,7 +281,7 @@ class TransparencyHead(nn.Module):
                 p_full = None
 
         lambda_tensor = self.calculate_lambda_tensor(
-            neg_entropy, mask_positions, current_nll, initial_nll
+            neg_entropy, mask_positions, current_nll, initial_nll, r_multiplier
         )
         # AFTER- changed
         lambda_tensor = lambda_tensor.unsqueeze(-1)  # (B, T, 1)
