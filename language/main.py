@@ -269,8 +269,6 @@ def main(config):
             "gen_ppl": gen_ppl,
             "entropy": sum(entropies) / len(entropies),
             "MAUVE": mauve_score,
-            "entropies": entropies,
-            "text_samples": samples,
         }
         with open(config.sampling.generated_seqs_path, "w") as file:
             json.dump(result_dict, file, indent=4)
