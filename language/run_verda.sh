@@ -58,6 +58,7 @@ RELIABILITY_START=0.05
 RELIABILITY_FULL=0.25
 RELIABILITY_BETA=0.99
 INIT_CENTRE=-10.0
+SM_PROB_WARMUP_STEPS=0
 
 # ── Parse arguments ───────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -82,6 +83,7 @@ while [[ $# -gt 0 ]]; do
     --reliability-full)        RELIABILITY_FULL="$2";        shift 2 ;;
     --reliability-beta)        RELIABILITY_BETA="$2";        shift 2 ;;
     --init-centre)             INIT_CENTRE="$2";             shift 2 ;;
+    --sm-prob-warmup-steps)    SM_PROB_WARMUP_STEPS="$2";    shift 2 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
@@ -201,6 +203,7 @@ CMD=(
   optim.lr=3e-5
   optim.tran_head_lr=0.01
   optim.sm_prob=0.8
+  optim.sm_prob_warmup_steps="${SM_PROB_WARMUP_STEPS}"
   optim.sm_t_min=0.2
   optim.sm_t_max=0.8
   lr_scheduler.num_warmup_steps=200
