@@ -119,6 +119,7 @@ class dLLMTrainer(Trainer):
         """
         
         logits = self.shift_logits(logits)
+        th_module = transparency_head(self.model)
         th_kwargs = get_th_kwargs(self.model)
 
         logs = {}
@@ -131,6 +132,11 @@ class dLLMTrainer(Trainer):
                     "transparency/steep":  th_kwargs["transparency_steepness"],
                     "transparency/temperature": th_kwargs["mixture_temp"],
                 })
+                if th_module is not None:
+                    if getattr(th_module, "last_lambda_mean", None) is not None:
+                        logs["transparency/lambda_mean"] = th_module.last_lambda_mean.item()
+                    if getattr(th_module, "last_lambda_std", None) is not None:
+                        logs["transparency/lambda_std"] = th_module.last_lambda_std.item()
 
             self.log(logs)
 

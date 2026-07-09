@@ -121,6 +121,8 @@ class TransparencyHead(nn.Module):
         self.slerp_n_iter = getattr(trans_args, "slerp_n_iter", 3)
 
         self.epsilon = 1e-6
+        self.last_lambda_mean = None
+        self.last_lambda_std = None
 
     @property
     def scale(self):
@@ -149,6 +151,15 @@ class TransparencyHead(nn.Module):
 
         # calculate lambda tensor
         lambda_tensor = self.calculate_lambda_tensor(neg_entropy, mask_positions) # (B,T,1)
+
+        # Record lambda mean/std over masked positions for tracking
+        if mask_positions.any():
+            masked_lambdas = lambda_tensor.squeeze(-1)[mask_positions]
+            self.last_lambda_mean = masked_lambdas.mean().detach()
+            self.last_lambda_std = masked_lambdas.std(unbiased=False).detach()
+        else:
+            self.last_lambda_mean = torch.tensor(0.0, device=lambda_tensor.device)
+            self.last_lambda_std = torch.tensor(0.0, device=lambda_tensor.device)
 
         if self.transparency_alg == "slerp_sm":
             # Spherical feedback in embedding space; returns inputs_embeds (B,T,D).
