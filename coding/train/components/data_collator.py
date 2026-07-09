@@ -178,6 +178,4 @@ class dLLMDataCollator(DefaultDataCollator):
             }
         )
 
-        # print("p_mask:", p_mask.item(), "dsigma:", dsigma.item())
-        # print("MASKED INPUTS ============", self.tokenizer.decode(batch["input_ids"][0], skip_special_tokens=False))
         return batch
