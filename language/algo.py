@@ -288,8 +288,8 @@ class MDLM_SM(MDLM):
         if r_ema < 0:
             return 0.0
             
-        r_start = getattr(self.config.algo.tran_head, "reliability_start", 0.05)
-        r_full = getattr(self.config.algo.tran_head, "reliability_full", 0.25)
+        r_start = float(getattr(self.config.algo.tran_head, "reliability_start", 0.05))
+        r_full = float(getattr(self.config.algo.tran_head, "reliability_full", 0.25))
         
         if r_full <= r_start:
             return 1.0
