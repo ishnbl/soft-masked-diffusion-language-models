@@ -188,3 +188,6 @@ coding/models/Dream-Coder-SM-k1-1/*
 
 language/patches/original/*
 language/patches/modified/*
+
+# CommandCode
+.commandcode/
