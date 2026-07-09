@@ -29,6 +29,7 @@ Download outputs:
 
 import os
 import sys
+
 import modal
 
 # ── volumes (persistent across runs) ─────────────────────────────────────────
@@ -52,8 +53,9 @@ OUT_DIR = "/vol/outputs"
 #   torchaudio 2.3.1   → 2.5.1
 #   triton 2.2.0       → 3.1.0  (required by torch 2.5.1)
 image = (
-    modal.Image.debian_slim(python_version="3.12")
-    .apt_install("git", "curl", "patch", "git-lfs")
+    modal.Image.debian_slim(python_version="3.12").apt_install(
+        "git", "curl", "patch", "git-lfs"
+    )
     # Step 1: install ALL non-torch deps first.  Pin numpy<2 because the older
     # ecosystem here (transformers 4.38, datasets 2.15) is not numpy-2 ready,
     # and a transitive resolver may otherwise pull numpy 2.x.
@@ -141,8 +143,8 @@ def train(
     fixed_lambda: float = -1.0,
     log_every_n_steps: int = 3,
 ):
-    import subprocess
     import shutil
+    import subprocess
 
     # ── preflight ────────────────────────────────────────────────────────────
     base_ckpt = f"{CKPT_DIR}/{base_ckpt_filename}"
@@ -360,8 +362,6 @@ def main(
             train.remote(a, **kwargs)
 
     print("\n[local] All runs complete.")
-    print(
-        f"[local] Download outputs:  modal volume get mdlm-outputs {
+    print(f"[local] Download outputs:  modal volume get mdlm-outputs {
             OUT_DIR
-        }/<group> ./local_outputs/"
-    )
+        }/<group> ./local_outputs/")

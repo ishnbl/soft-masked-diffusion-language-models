@@ -187,4 +187,8 @@ coding/models/Dream-Coder-SM-k1-1/*
 *.pdf
 
 language/patches/original/*
-language/patches/modified/*
+language/patches/modified/*mdlm.ckpt
+*.ckpt
+language/.hydra/
+language/outputs/
+*.out

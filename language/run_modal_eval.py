@@ -1,5 +1,6 @@
 import os
 import sys
+
 import modal
 
 ckpt_volume = modal.Volume.from_name("mdlm-checkpoints", create_if_missing=True)
@@ -81,8 +82,8 @@ def run_eval(
     fixed_lambda: float = -1.0,
     wandb_offline: bool = False,
 ):
-    import subprocess
     import shutil
+    import subprocess
 
     # Decide volume based on file name
     if checkpoint_filename == "mdlm_owt.ckpt":
