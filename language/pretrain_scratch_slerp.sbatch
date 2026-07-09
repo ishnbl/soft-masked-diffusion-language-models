@@ -23,5 +23,6 @@ bash run_verda.sh \
   --reliability-start 0.05 \
   --reliability-full 0.25 \
   --reliability-beta 0.99 \
-  --data-dir "$HOME/data" \
-  --out-dir "$HOME/outputs"
+  --init-centre -10.0 \
+  --data-dir "$HOME/sm_data" \
+  --out-dir "$HOME/sm_outputs"

@@ -57,6 +57,7 @@ RELIABILITY_CONDITIONED="false"
 RELIABILITY_START=0.05
 RELIABILITY_FULL=0.25
 RELIABILITY_BETA=0.99
+INIT_CENTRE=-10.0
 
 # ── Parse arguments ───────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -80,6 +81,7 @@ while [[ $# -gt 0 ]]; do
     --reliability-start)       RELIABILITY_START="$2";       shift 2 ;;
     --reliability-full)        RELIABILITY_FULL="$2";        shift 2 ;;
     --reliability-beta)        RELIABILITY_BETA="$2";        shift 2 ;;
+    --init-centre)             INIT_CENTRE="$2";             shift 2 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
@@ -174,7 +176,7 @@ CMD=(
   algo.tran_head.slerp_n_iter="${SLERP_N_ITER}"
   algo.tran_head.mixinputs_k=3
   algo.tran_head.init_scale=0.5
-  algo.tran_head.init_centre=-4
+  algo.tran_head.init_centre="${INIT_CENTRE}"
   algo.tran_head.reliability_conditioned="${RELIABILITY_CONDITIONED}"
   algo.tran_head.reliability_start="${RELIABILITY_START}"
   algo.tran_head.reliability_full="${RELIABILITY_FULL}"
