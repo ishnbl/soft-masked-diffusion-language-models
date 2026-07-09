@@ -1,6 +1,6 @@
 # Coding with Soft-Masked Diffusion Language Models
 
-## 🔧 Requirements 
+## Requirements 
 
 ### Hardware
 
@@ -34,7 +34,7 @@ bash setup.sh
 ```
 
 
-## 🏋 Fine-tuning  
+## Fine-tuning  
 
 For finetuning `Dream-v0-Instruct-7B-SM`, run
 ``` bash
@@ -86,7 +86,7 @@ An example `transparency_config.json` is as follows:
 ```
 This is necessary to have before running evaluation. The diffusion generate function will simply take these parameters as input. They vary based on learning process of the PEFT adaptor hence being included with the PEFT adaptor files.
 
-## 📊 Evaluation
+## Evaluation
 
 Once the Dream models have been finetuned and the soft-masking PEFT adaptors are available on your HF, you can run the evaluation. Make sure to put the path to the HF PEFT adaptor as the `model`.
 
@@ -195,7 +195,7 @@ The training procedure is quite simple:
 ## Acknowlegement
 This part of the repository was built on top of [Dream-7B](https://github.com/DreamLM/Dream).
 
-## Citation 📚
+## Citation
 If you use the work released here for your research, please consider citing our papers:
 ```bibtex
 @inproceedings{
