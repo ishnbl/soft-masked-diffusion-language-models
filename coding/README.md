@@ -169,14 +169,16 @@ if sm_args.sm_alg != "none":
 
 ## Parameters of SM
 
-SM requires a few additional parameters to `diffusion_generate` this effects the feedback that is given during the generation process:
-- `transparency_alg`: (`none`, `mixinputs_with_topk`, or `mixinputs_with_temp`) Specifies which type of feedback to use. Top-k is the top-k tokens, and temp involves a learnable temperature for the soft-masking function.
+SM requires a few additional parameters to `diffusion_generate` which affect the feedback that is given during the generation process:
+- `transparency_alg`: (`none`, `mixinputs_with_topk`, `mixinputs_with_temp`, or `slerp_sm`) Specifies which type of feedback to use. `slerp_sm` implements Spherical Soft-Masking, `mixinputs_with_topk` is linear top-k feedback, and `mixinputs_with_temp` uses a learnable temperature.
 - `transparency_scale`: The max scaling factor for the SM feedback sigmoid function.
 - `transparency_centre`: The centre (or offset) for the SM feedback sigmoid function.
 - `transparency_steepness`: The steepness parameter for the SM feedback sigmoid function.
-- `mixinputs_k`: The number of tokens to include in feedback (only if `transparency_alg` is `mixinputs_with_topk`)
+- `mixinputs_k`: The number of tokens to include in feedback (for `mixinputs_with_topk` or `slerp_sm`)
 - `mixture_temp`: The softmaxing temperature for feedback (only if `transparency_alg` is `mixinputs_with_temp`)
+- `slerp_n_iter`: The number of Karcher flow iterations to compute the Fréchet mean (only if `transparency_alg` is `slerp_sm`; default: 3)
 - `transparency_scheduling`: Specifies the scheduling of SM during the decoding process (`none`, `linear`, or `stepwise`). Results are shown in ablations.
+
 
 ## Training
 
@@ -194,8 +196,8 @@ The training procedure is quite simple:
 This part of the repository was built on top of [Dream-7B](https://github.com/DreamLM/Dream).
 
 ## Citation 📚
-If you use the work released here for your research, please consider citing our paper:
-```
+If you use the work released here for your research, please consider citing our papers:
+```bibtex
 @inproceedings{
 hersche_softmasking_2026,
 title={Soft-Masked Diffusion Language Models},
@@ -204,4 +206,12 @@ booktitle={The Fourteenth International Conference on Learning Representations (
 year={2026},
 url={https://openreview.net/forum?id=Gba02UMvrG}
 }
+
+@article{lost_in_interpolation_2026,
+title={Lost in Interpolation: Why Predictive Feedback Fails in Diffusion Language Models},
+author={Hersche, Michael and Moor-Smith, Samuel and Hofmann, Thomas and Rahimi, Abbas},
+journal={arXiv preprint},
+year={2026}
+}
 ```
+
