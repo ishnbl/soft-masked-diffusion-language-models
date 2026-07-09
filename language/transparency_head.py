@@ -33,24 +33,27 @@ def frechet_mean_sphere(vhat, weights, n_iter, eps):
         omega = torch.acos(cos)  # (..., k)
         sin_omega = torch.sin(omega)
         # log map at mu: ratio = omega / sin(omega) -> 1 as omega -> 0
-        ratio = torch.where(
-            sin_omega > eps, omega / sin_omega.clamp_min(eps), torch.ones_like(omega)
-        )
+        # Since cos is clamped to [-1+eps, 1-eps], omega is in (0, pi), so omega > 0 and sin_omega > 0.
+        safe_sin_omega = torch.where(sin_omega > eps, sin_omega, torch.ones_like(sin_omega))
+        ratio = torch.where(sin_omega > eps, omega / safe_sin_omega, torch.ones_like(omega))
+        
         tang = ratio.unsqueeze(-1) * (
             vhat - cos.unsqueeze(-1) * mu.unsqueeze(-2)
         )  # (..., k, D)
         tau = (w * tang).sum(-2)  # (..., D)
         tau_norm = tau.norm(dim=-1, keepdim=True)  # (..., 1)
-        direction = tau / tau_norm.clamp_min(eps)
-        # exp map back onto the sphere; as tau_norm -> 0 this leaves mu unchanged
-        mu = torch.cos(tau_norm) * mu + torch.sin(tau_norm) * direction
+        
+        # exp map back onto the sphere; as tau_norm -> 0 this leaves mu unchanged (approaches LERP/tangent step)
+        safe_tau_norm = torch.where(tau_norm > eps, tau_norm, torch.ones_like(tau_norm))
+        sin_ratio = torch.where(tau_norm > eps, torch.sin(tau_norm) / safe_tau_norm, torch.ones_like(tau_norm))
+        mu = torch.cos(tau_norm) * mu + sin_ratio * tau
         mu = F.normalize(mu, dim=-1, eps=eps)
     return mu
 
 
 def slerp_sm_feedback(
     input_ids,
-    logits,
+    masked_logits,
     embedding_matrix,
     mask_token_id,
     lambda_tensor,
@@ -67,15 +70,13 @@ def slerp_sm_feedback(
     the unit hypersphere. Unmasked positions keep their own token embedding.
 
     input_ids:        (B, T)     current (partially masked) token ids
-    logits:           (B, T, V)  feedback logits from the previous pass
+    masked_logits:    (M, V)     feedback logits at masked positions
     embedding_matrix: (V, D)     token embedding table E
     lambda_tensor:    (B, T, 1)  SLERP weight, 0 on non-mask positions
     stats:            optional dict; if given, gets "slerp_angle_mean" (the mean
                       SLERP angle over masked positions) for live logging
     Returns:          (B, T, D)  soft input embeddings
     """
-    # changed
-
     compute_dtype = torch.float32
     E = embedding_matrix  # (V, D) — index only, no full cast
 
@@ -89,7 +90,6 @@ def slerp_sm_feedback(
     )  # only allocated when there are masked positions
 
     # --- Operate only on the M masked positions to avoid wasted topk over (B,T,V). ---
-    masked_logits = logits[mask_pos]  # (M, V)
     lam = lambda_tensor.squeeze(-1)[mask_pos].to(compute_dtype).unsqueeze(-1)  # (M, 1)
 
     # Top-k tokens and renormalised weights pi (== softmax over the top-k logits).
@@ -97,14 +97,12 @@ def slerp_sm_feedback(
     pi = torch.softmax(topk_logits.to(compute_dtype), dim=-1)  # (M, k)
 
     # Unit embeddings of the top-k tokens and Frechet mean mu*.
-    # AFTER
     vhat = F.normalize(E[topk_indices].to(compute_dtype), dim=-1, eps=eps)  # (M, k, D)
     mu = frechet_mean_sphere(vhat, pi, n_iter, eps)  # (M, D)
 
     # Normalised mask embedding m_hat. Keep the original mask-token norm so we
     # can rescale the unit-sphere SLERP result back to the embedding scale the
     # backbone was trained on (otherwise norm-1 inputs are out of distribution).
-    # AFTER
     mask_emb = E[mask_token_id].to(compute_dtype)  # (D,)
     mask_norm = mask_emb.norm()  # scalar
     mhat = F.normalize(mask_emb, dim=-1, eps=eps).expand_as(mu)  # (M, D)
@@ -112,21 +110,18 @@ def slerp_sm_feedback(
     # SLERP(m_hat, mu*, lambda).
     cos = (mhat * mu).sum(-1, keepdim=True).clamp(-1 + eps, 1 - eps)  # (M, 1)
     omega = torch.acos(cos)  # (M, 1)
-    sin_omega = torch.sin(omega).clamp_min(eps)
-    coeff_m = torch.sin((1 - lam) * omega) / sin_omega
-    coeff_mu = torch.sin(lam * omega) / sin_omega
+    sin_omega = torch.sin(omega)
+    
+    # Since cos is clamped to [-1+eps, 1-eps], omega is in (0, pi), so omega > 0 and sin_omega > 0.
+    safe_sin_omega = torch.where(omega > eps, sin_omega, torch.ones_like(sin_omega))
+    coeff_m = torch.where(omega > eps, torch.sin((1 - lam) * omega) / safe_sin_omega, 1.0 - lam)
+    coeff_mu = torch.where(omega > eps, torch.sin(lam * omega) / safe_sin_omega, lam)
     slerp = coeff_m * mhat + coeff_mu * mu  # (M, D)
-    # When mask and mean are ~identical the SLERP is undefined -> return m_hat.
-    slerp = torch.where(omega < eps, mhat, slerp)
-    # The SLERP lives on the unit hypersphere (norm 1). Rescale back to the
-    # original mask-token norm so the embeddings stay in the backbone's
-    # training distribution rather than collapsing onto the unit sphere.
+    
+    # Rescale back to the original mask-token norm
     slerp = slerp * mask_norm  # (M, D)
 
     # Scatter slerp results back into the full (B,T,D) output tensor.
-    # changed
-    # out[mask_pos] = slerp
-    # AFTER
     out = out.index_put((mask_pos,), slerp)
 
     if stats is not None:
@@ -302,7 +297,7 @@ class TransparencyHead(nn.Module):
             stats = {}
             out = slerp_sm_feedback(
                 input_ids,
-                logits_prelim,
+                masked_logits,
                 embedding_matrix,
                 self.mask_token_id,
                 lambda_tensor,

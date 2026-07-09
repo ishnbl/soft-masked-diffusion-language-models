@@ -57,7 +57,11 @@ class dLLMTrainer(Trainer):
             return False
 
         if self.model.training:
-            softmasking_prob = seeded_rand((), self.model.device)
+            # DDP-safe deterministic step-based seeding so all ranks make identical decisions
+            seed = int(self.state.global_step)
+            if hasattr(self, "args") and hasattr(self.args, "seed"):
+                seed = seed * 1000003 + int(self.args.seed)
+            softmasking_prob = seeded_rand((), self.model.device, seed=seed)
         else:
             softmasking_prob = seeded_rand((), self.model.device, seed=batch_seed)
 
@@ -98,16 +102,10 @@ class dLLMTrainer(Trainer):
             # First get the input embedding table
             W = model.get_input_embeddings().weight  # (V,D)
 
-            if th_module.transparency_alg == "slerp_sm":
-                # SLERP feedback produces input embeddings directly (B,T,D).
-                inputs["inputs_embeds"] = th_module(
-                    x_t, logits_prelim, embedding_matrix=W
-                )
-            else:
-                # Set the input_embeds via the transparency head forward pass
-                p_sm = th_module(x_t, logits_prelim)  # (B,T,V)
-                p_sm = p_sm.to(dtype=W.dtype, device=W.device)  # (B,T,V)
-                inputs["inputs_embeds"] = torch.matmul(p_sm, W)  # (B,T,D)
+            # Set the input_embeds via the transparency head forward pass directly
+            inputs["inputs_embeds"] = th_module(
+                x_t, logits_prelim, embedding_matrix=W
+            )
 
         if self.loss_calc == "model_weighted":
             outputs = model(**inputs, labels=labels)
