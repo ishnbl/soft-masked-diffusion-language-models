@@ -95,6 +95,9 @@ class MDLM_SM(MDLM):
       # Initialize transparency head for soft feedback
       self.tran_head = TransparencyHead(mask_token_id = self.mask_index, 
                                 trans_args = config.algo.tran_head)
+      if not self.tran_head.learnable:
+          for param in self.tran_head.parameters():
+              param.requires_grad = False
 
   def _eval_mode(self):
       self.tran_head.eval()
@@ -121,10 +124,11 @@ class MDLM_SM(MDLM):
               main_params.append(param)
 
       # Create the parameter groups with different learning rates
-      param_groups = [
-          {'params': main_params, 'lr': self.config.optim.lr},
-          {'params': special_lr_params, 'lr': self.config.optim.tran_head_lr}
-      ]
+      param_groups = []
+      if main_params:
+          param_groups.append({'params': main_params, 'lr': self.config.optim.lr})
+      if special_lr_params:
+          param_groups.append({'params': special_lr_params, 'lr': self.config.optim.tran_head_lr})
 
       # Instantiate the optimizer with the parameter groups
       optimizer = torch.optim.AdamW(
@@ -153,10 +157,10 @@ class MDLM_SM(MDLM):
       loss = super().training_step(batch, batch_idx)
 
       # Log the learnable transparency parameters.
-      self.log('transparency/scale', self.tran_head.scale.item(), on_step=True, on_epoch=False, sync_dist=True)
-      self.log('transparency/centre', self.tran_head.centre.item(), on_step=True, on_epoch=False, sync_dist=True)
-      self.log('transparency/steepness', self.tran_head.steepness.item(), on_step=True, on_epoch=False, sync_dist=True)
-      self.log('transparency/temperature', self.tran_head.temperature.item(), on_step=True, on_epoch=False, sync_dist=True)
+      self.log('transparency/scale', self.tran_head.scale.item(), on_step=True, on_epoch=False, sync_dist=False)
+      self.log('transparency/centre', self.tran_head.centre.item(), on_step=True, on_epoch=False, sync_dist=False)
+      self.log('transparency/steepness', self.tran_head.steepness.item(), on_step=True, on_epoch=False, sync_dist=False)
+      self.log('transparency/temperature', self.tran_head.temperature.item(), on_step=True, on_epoch=False, sync_dist=False)
 
       # Log the realized interpolation behavior (set during the head's forward).
       if self.tran_head.last_lambda_mean is not None:
@@ -218,16 +222,53 @@ class MDLM_SM(MDLM):
 
     xt = self.q_xt(x0, alpha_t)
 
-    use_soft_mask = not train_mode or (torch.rand(1).item() < self.config.optim.sm_prob)
+    # --- DDP-safe soft-mask gate (training only) -----------------------------
+    # Under data-parallel TRAINING every rank must take the same branch here: if
+    # some ranks exercise the tran_head sub-graph and others do not, the tran_head
+    # params receive gradients on a subset of ranks only and the DDP gradient
+    # all-reduce desyncs (wrong averaging; hangs in stricter setups). The naive
+    # `torch.rand(1)` draw and the per-rank `t.mean()` band test both diverge
+    # across ranks, so during training we make both decisions rank-identical:
+    #   (1) Bernoulli gate seeded by the global step  -> same on every rank, no comms.
+    #   (2) time-band test on the GLOBAL mean of t (all-reduced) -> all ranks agree.
+    #
+    # Validation runs NO backward, so there is no gradient-sync constraint at eval.
+    # We therefore keep the original per-batch local decision during eval. This
+    # matters: the global mean of t is tightly concentrated at ~0.5, so an
+    # all-reduced band test is in-band on essentially every val batch, whereas the
+    # per-batch mean legitimately falls out of band on some. Forcing soft-masking
+    # onto every val batch inflates perplexity while the tran_head is untrained
+    # (e.g. at init), so we must NOT do it here. It also avoids an unnecessary
+    # collective at eval that can deadlock on an uneven validation shard.
+    if train_mode:
+        gate_gen = torch.Generator()
+        gate_gen.manual_seed(int(self.config.seed) * 1_000_003
+                             + int(self.global_step))
+        sm_gate = (torch.rand(1, generator=gate_gen).item()
+                   < self.config.optim.sm_prob)
+        t_mean = t.mean()
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            t_mean = t_mean.clone()
+            torch.distributed.all_reduce(t_mean, op=torch.distributed.ReduceOp.SUM)
+            t_mean = t_mean / torch.distributed.get_world_size()
+        t_mean = t_mean.item()
+    else:
+        # Eval: original behavior — always consider soft-mask, local per-batch band.
+        sm_gate = True
+        t_mean = t.mean().item()
+
+    in_band = (self.config.optim.sm_t_min <= t_mean <= self.config.optim.sm_t_max)
+    use_soft_mask = sm_gate and in_band
 
     if use_soft_mask:
-        # Pass 1: Get predictions for feedback. Block gradients
-        log_x_theta_pass1 = self.forward(xt, sigma=sigma).detach()
-
+        # Pass 1: Get predictions for feedback. No grad needed — avoids building
+        # the full backward graph for a forward whose output is only used as data.
+        with torch.no_grad():
+            log_x_theta_pass1 = self.forward(xt, sigma=sigma)
         # Pass 2: Main pass that computes the gradients.
         log_x_theta = self.forward(xt, sigma=sigma, log_p_x0=log_x_theta_pass1)
     else:
-        # --- Standard Path ---
+        # --- Standard Path (gate off, or batch is out of band) ---
         log_x_theta = self.forward(xt, sigma=sigma)
 
     utils.print_nans(log_x_theta, 'model_output')
@@ -275,8 +316,15 @@ class MDLM_SM(MDLM):
             x = self._denoiser_update(x, t)
         else:
             unet_conditioning = self._sigma_from_alphat(self.noise(t)[1])
-            # Use the final feedback pass for noise removal
-            final_log_p_x0 = self.forward(x, unet_conditioning, log_p_x0=log_p_x0_cache_sm)
+            # Use the final feedback pass for noise removal, but only feed back the
+            # cached prediction when this final timestep is inside the soft-mask
+            # band. Noise removal runs at min_t (≈eps), which is normally below
+            # sm_t_min, so by default this is a standard forward.
+            nr_time = t.reshape(-1)[0].item()
+            nr_in_band = (self.config.optim.sm_t_min <= nr_time
+                          <= self.config.optim.sm_t_max)
+            final_feedback = log_p_x0_cache_sm if nr_in_band else None
+            final_log_p_x0 = self.forward(x, unet_conditioning, log_p_x0=final_feedback)
             x = final_log_p_x0.argmax(dim=-1)
     return x
 
@@ -293,7 +341,14 @@ class MDLM_SM(MDLM):
       move_chance_s = (t - dt)[:, None, None]
       assert move_chance_t.ndim == 3, move_chance_t.shape
       if p_x0 is None:
-        log_p_x0_sm = self.forward(x, sigma_t,log_p_x0_sm)
+        # Time-band gate: only feed the cached prediction back (soft-mask path)
+        # when the current timestep is inside [sm_t_min, sm_t_max]; otherwise run
+        # a standard forward, matching the original soft-masking paper.
+        time_val = t.reshape(-1)[0].item()
+        in_band = (self.config.optim.sm_t_min <= time_val
+                   <= self.config.optim.sm_t_max)
+        feedback = log_p_x0_sm if in_band else None
+        log_p_x0_sm = self.forward(x, sigma_t, feedback)
         p_x0 = log_p_x0_sm.exp()
         if self.config.sampling.p_nucleus < 1:
           sorted_probs, sorted_indices = torch.sort(p_x0, descending=True, dim=-1)
@@ -354,7 +409,8 @@ class MDLM_SM(MDLM):
           q_xs = torch.where(copy_flag.unsqueeze(-1), q_xs, q_xs_2)
           xs = sample_categorical(q_xs)
       
-      if torch.allclose(xs, x) and not self.time_conditioning:
+      # changed
+      if torch.equal(xs, x) and not self.time_conditioning:
         p_x0_cache = p_x0
       else:
         p_x0_cache = None

@@ -87,6 +87,7 @@ COMMON=(
   algo.tran_head.init_centre=-2.5
   training.finetune_path="$BASE_CKPT"
   checkpointing.resume_from_ckpt=false
+  callbacks.checkpoint_every_n_steps.every_n_train_steps=100
   # Append the freeze-backbone callback to the default callback group.
   +callbacks/freeze_backbone=freeze_backbone
   callbacks.freeze_backbone.freeze_until_step="$FREEZE_UNTIL"

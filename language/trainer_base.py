@@ -135,43 +135,39 @@ class TrainerBase(L.LightningModule):
       self.ema.load_state_dict(checkpoint['ema'])
     # Copied from:
     # https://github.com/Dao-AILab/flash-attention/blob/main/training/src/datamodules/language_modeling_hf.py#L41
-    self.fast_forward_epochs = checkpoint['loops'][
-      'fit_loop']['epoch_progress']['current']['completed']
-    self.fast_forward_batches = checkpoint['loops'][
-      'fit_loop']['epoch_loop.batch_progress'][
-        'current']['completed']
+    # Robustly check for the loop progress keys in PyTorch Lightning 2.x and PL 1.x without raising a KeyError.
+    self.fast_forward_epochs = 0
+    self.fast_forward_batches = 0
+    
+    try:
+      if 'loops' in checkpoint and 'fit_loop' in checkpoint['loops']:
+        fit_loop = checkpoint['loops']['fit_loop']
+        
+        # Resolve epoch progress
+        if 'epoch_progress' in fit_loop:
+          self.fast_forward_epochs = fit_loop['epoch_progress']['current']['completed']
+        elif 'epoch_loop.epoch_progress' in fit_loop:
+          self.fast_forward_epochs = fit_loop['epoch_loop.epoch_progress']['current']['completed']
+        
+        # Resolve batch progress
+        if 'epoch_loop' in fit_loop and 'batch_progress' in fit_loop['epoch_loop']:
+          self.fast_forward_batches = fit_loop['epoch_loop']['batch_progress']['current']['completed']
+        elif 'epoch_loop.batch_progress' in fit_loop:
+          self.fast_forward_batches = fit_loop['epoch_loop.batch_progress']['current']['completed']
+        elif 'batch_progress' in fit_loop:
+          self.fast_forward_batches = fit_loop['batch_progress']['current']['completed']
+    except Exception as e:
+      # Log warning but don't crash
+      pass
 
   def on_save_checkpoint(self, checkpoint):
     if self.ema:
       checkpoint['ema'] = self.ema.state_dict()
-    # Copied from:
-    # https://github.com/Dao-AILab/flash-attention/blob/main/training/src/tasks/seq.py
-    # ['epoch_loop.batch_progress']['total']['completed']
-    # is 1 iteration behind, so we're using the optimizer's progress.
-    checkpoint['loops']['fit_loop'][
-      'epoch_loop.batch_progress']['total'][
-        'completed'] = checkpoint['loops']['fit_loop'][
-          'epoch_loop.automatic_optimization.optim_progress'][
-            'optimizer']['step']['total'][
-              'completed'] * self.trainer.accumulate_grad_batches
-    checkpoint['loops']['fit_loop'][
-      'epoch_loop.batch_progress']['current'][
-        'completed'] = checkpoint['loops']['fit_loop'][
-          'epoch_loop.automatic_optimization.optim_progress'][
-            'optimizer']['step']['current'][
-              'completed'] * self.trainer.accumulate_grad_batches
-    # _batches_that_stepped tracks the number of global steps,
-    # not the number of local steps, so we don't multiply with
-    # self.trainer.accumulate_grad_batches here.
-    checkpoint['loops']['fit_loop'][
-      'epoch_loop.state_dict'][
-        '_batches_that_stepped'] = checkpoint['loops']['fit_loop'][
-          'epoch_loop.automatic_optimization.optim_progress'][
-            'optimizer']['step']['total']['completed']
+    
+    # Safely load sampler state if present
     if 'sampler' not in checkpoint.keys():
       checkpoint['sampler'] = {}
-    if hasattr(self.trainer.train_dataloader.sampler,
-               'state_dict'):
+    if hasattr(self.trainer, 'train_dataloader') and hasattr(self.trainer.train_dataloader, 'sampler') and hasattr(self.trainer.train_dataloader.sampler, 'state_dict'):
       sampler_state_dict = self.trainer.\
         train_dataloader.sampler.state_dict()
       checkpoint['sampler'][
@@ -180,14 +176,42 @@ class TrainerBase(L.LightningModule):
     else:
       checkpoint['sampler']['random_state'] = None
 
+    # Apply PL 1.x epoch_loop.batch_progress patch only if those keys exist
+    try:
+      if 'loops' in checkpoint and 'fit_loop' in checkpoint['loops']:
+        fit_loop = checkpoint['loops']['fit_loop']
+        if 'epoch_loop.batch_progress' in fit_loop and 'epoch_loop.automatic_optimization.optim_progress' in fit_loop:
+          # PL 1.x workaround for batch_progress off-by-one
+          fit_loop['epoch_loop.batch_progress']['total']['completed'] = (
+            fit_loop['epoch_loop.automatic_optimization.optim_progress']['optimizer']['step']['total']['completed']
+            * self.trainer.accumulate_grad_batches
+          )
+          fit_loop['epoch_loop.batch_progress']['current']['completed'] = (
+            fit_loop['epoch_loop.automatic_optimization.optim_progress']['optimizer']['step']['current']['completed']
+            * self.trainer.accumulate_grad_batches
+          )
+          if 'epoch_loop.state_dict' in fit_loop:
+            fit_loop['epoch_loop.state_dict']['_batches_that_stepped'] = (
+              fit_loop['epoch_loop.automatic_optimization.optim_progress']['optimizer']['step']['total']['completed']
+            )
+    except Exception as e:
+      # Do not crash the checkpoint saving process if the workaround fails
+      pass
+
   def on_train_start(self):
     if self.ema:
       self.ema.move_shadow_params_to_device(self.device)
     # Adapted from:
     # https://github.com/Dao-AILab/flash-attention/blob/main/training/src/datamodules/language_modeling_hf.py
-    distributed = (
-      self.trainer._accelerator_connector.use_distributed_sampler
-      and self.trainer._accelerator_connector.is_distributed)
+    # Robust check for distributed training compatible with PL 1.x and 2.x
+    distributed = False
+    if hasattr(self.trainer, 'world_size'):
+      distributed = self.trainer.world_size > 1
+    elif hasattr(self.trainer, '_accelerator_connector'):
+      distributed = (
+        getattr(self.trainer._accelerator_connector, 'use_distributed_sampler', False)
+        and getattr(self.trainer._accelerator_connector, 'is_distributed', False)
+      )
     if distributed:
       sampler_cls = dataloader.FaultTolerantDistributedSampler
     else:
@@ -249,6 +273,16 @@ class TrainerBase(L.LightningModule):
                         train_mode=True)
     self.metrics.update_train(losses.nlls, losses.prior_loss,
                               losses.num_tokens)
+
+    # Surface the running train metrics on every optimizer step so they appear
+    # alongside the transparency-head logs in W&B.
+    for k, v in self.metrics.train_nlls.items():
+      self.log(name=k,
+               value=v.compute(),
+               on_step=True,
+               on_epoch=False,
+               sync_dist=True)
+
     self.log(name='trainer/loss',
              value=losses.loss.item(),
              on_step=True,
@@ -408,15 +442,20 @@ class Diffusion(TrainerBase):
       batch_dim = n
       n = self.config.loader.global_batch_size
     _eps_t = torch.rand(n, device=self.device)
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+      torch.distributed.broadcast(_eps_t, src=0)
     if self.antithetic_sampling:
       offset = torch.arange(n, device=self.device) / n
       _eps_t = (_eps_t / n + offset) % 1
     t = (1 - self.sampling_eps) * _eps_t + self.sampling_eps
     if accum_step is not None:
       t = t.chunk(self.trainer.num_nodes)[self.trainer.node_rank]
+      # Split by accum step first so each (step, rank) pair covers the same
+      # narrow t-band.  Splitting by device first would give rank 0 all low-t
+      # and rank 1 all high-t, making the all-reduced t_mean always ≈ 0.5 and
+      # the in_band check always True — soft-mask fires 80% of steps vs 50%.
+      t = t.chunk(self.trainer.accumulate_grad_batches)[accum_step]
       t = t.chunk(self.trainer.num_devices)[self.trainer.local_rank]
-      t = t.chunk(self.trainer.accumulate_grad_batches)[
-        accum_step]
       # corner case for the last datapoint
       t = t[:batch_dim]
     return t
@@ -639,7 +678,9 @@ class AbsorbingState(Diffusion):
         q_xs = torch.where(copy_flag.unsqueeze(-1), q_xs, q_xs_2)
         xs = sample_categorical(q_xs)
 
-    if torch.allclose(xs, x) and not self.time_conditioning:
+    #changed
+    
+    if torch.equal(xs, x) and not self.time_conditioning:
       p_x0_cache = p_x0
     else:
       p_x0_cache = None

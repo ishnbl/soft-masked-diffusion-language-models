@@ -1,0 +1,75 @@
+#!/bin/bash
+# ===========================================================================
+# slurm_train.sbatch — submit a single-node multi-GPU slerp/topk finetune.
+#
+# Targets ONE node with N GPUs (single-node DDP — what the soft-mask gate
+# covers). Lightning spawns one process per GPU itself, so we use --ntasks=1
+# and call plain `python` (via the run_*.sh launcher); do NOT wrap it in srun
+# with ntasks-per-node>1 or Lightning's SLURM integration will fight the
+# launcher over the world size.
+#
+# EDIT THE #SBATCH LINES marked TODO for your cluster, then submit:
+#   sbatch verda/slurm_train.sbatch                       # slerp (default)
+#   sbatch --export=ALL,ALG=topk verda/slurm_train.sbatch # top-k
+#   sbatch --export=ALL,ALG=slerp,FIXED_LAMBDA=0.5,SEED=2 verda/slurm_train.sbatch
+#
+# Change the GPU count by editing --gres=gpu:N below (the launcher reads the
+# count from SLURM's CUDA_VISIBLE_DEVICES — do NOT also set NUM_GPUS).
+# ===========================================================================
+#SBATCH --job-name=sm-mdlm
+#SBATCH --nodes=1
+#SBATCH --gres=gpu:4                 # TODO: GPUs per node (also the DDP world size)
+#SBATCH --ntasks=1                   # one task; Lightning spawns the per-GPU procs
+#SBATCH --cpus-per-task=16           # TODO: ~4 dataloader workers/GPU
+#SBATCH --mem=128G                   # TODO: cluster-dependent
+#SBATCH --time=07:00:00              # TODO: walltime
+#SBATCH --output=slurm-%x-%j.out
+##SBATCH --partition=<PARTITION>     # TODO: uncomment + set
+##SBATCH --account=<ACCOUNT>         # TODO: uncomment + set if your cluster needs it
+
+set -euo pipefail
+
+# ── User config (override via --export=ALL,VAR=...) ────────────────────────
+ALG="${ALG:-slerp}"                                  # slerp | topk
+ENV_NAME="${ENV_NAME:-sm-env}"
+CONDA_HOME="${CONDA_HOME:-$HOME/miniconda3}"
+
+# Put these on SHARED, persistent storage (visible from the compute node).
+BASE_CKPT="${BASE_CKPT:-$HOME/checkpoints/mdlm_owt.ckpt}"
+export DATA_CACHE_DIR="${DATA_CACHE_DIR:-$HOME/sm_data/owt_cache}"
+export OUT_ROOT="${OUT_ROOT:-$HOME/sm_outputs}"
+
+# Compute nodes are frequently air-gapped. Default W&B to offline; sync later
+# from the login node with `wandb sync $OUT_ROOT/.../wandb/offline-run-*`.
+export WANDB_MODE="${WANDB_MODE:-offline}"
+
+# ── Activate the env built by setup_cluster.sh ─────────────────────────────
+if [[ ! -d "$CONDA_HOME" ]]; then
+  echo "[job] CONDA_HOME=$CONDA_HOME not found — run verda/setup_cluster.sh first."; exit 1
+fi
+# shellcheck source=/dev/null
+source "${CONDA_HOME}/etc/profile.d/conda.sh"
+conda activate "$ENV_NAME"
+
+# ── Run from language/ (this script lives in language/verda/) ──────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LANG_DIR="$(dirname "$SCRIPT_DIR")"
+cd "$LANG_DIR"
+
+echo "[job] node=$(hostname)  ALG=${ALG}  CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader || true
+
+# The launchers read the GPU count from CUDA_VISIBLE_DEVICES (set by SLURM via
+# --gres), so we deliberately do NOT pass NUM_GPUS.
+case "$ALG" in
+  slerp) LAUNCHER="verda/run_slerp.sh" ;;
+  topk)  LAUNCHER="verda/run_topk.sh" ;;
+  *) echo "[job] ALG must be 'slerp' or 'topk', got '${ALG}'"; exit 1 ;;
+esac
+
+echo "[job] launching ${LAUNCHER}"
+BASE_CKPT="$BASE_CKPT" bash "$LAUNCHER"
+
+echo "[job] done. Outputs under ${OUT_ROOT}"
+[[ "$WANDB_MODE" == "offline" ]] && \
+  echo "[job] W&B was offline — sync later:  wandb sync ${OUT_ROOT}/*/wandb/offline-run-*"

@@ -33,12 +33,12 @@ import modal
 
 # ── volumes (persistent across runs) ─────────────────────────────────────────
 ckpt_volume = modal.Volume.from_name("mdlm-checkpoints", create_if_missing=True)
-data_volume = modal.Volume.from_name("mdlm-data",        create_if_missing=True)
-out_volume  = modal.Volume.from_name("mdlm-outputs",     create_if_missing=True)
+data_volume = modal.Volume.from_name("mdlm-data", create_if_missing=True)
+out_volume = modal.Volume.from_name("mdlm-outputs", create_if_missing=True)
 
 CKPT_DIR = "/vol/checkpoints"
 DATA_DIR = "/vol/data"
-OUT_DIR  = "/vol/outputs"
+OUT_DIR = "/vol/outputs"
 
 # ── container image ───────────────────────────────────────────────────────────
 # debian_slim + PyTorch cu124 wheels: torch bundles its own CUDA runtime so we
@@ -61,7 +61,7 @@ image = (
         "numpy<2",
         "datasets==2.15.0",
         "einops==0.7.0",
-        "fsspec==2023.10.0",     # match datasets 2.15 constraint
+        "fsspec==2023.10.0",  # match datasets 2.15 constraint
         "h5py==3.10.0",
         "hydra-core==1.3.2",
         "lightning==2.2.1",
@@ -76,7 +76,7 @@ image = (
         "timm",
         "huggingface-hub",
         "hf_transfer",
-        "mauve-text",            # imported eagerly by main.py even when unused
+        "mauve-text",  # imported eagerly by main.py even when unused
     )
     # Step 2: install torch LAST with cu124 index — overrides any CPU torch
     # that lightning/transformers may have pulled in transitively.
@@ -111,14 +111,15 @@ app = modal.App("slerp-vs-topk-finetune")
 
 # ── training function ─────────────────────────────────────────────────────────
 
+
 @app.function(
     image=image,
-    gpu="A100",
-    timeout=7 * 3600,        # 7 h — generous for 5k steps
+    gpu="L40S",
+    timeout=7 * 3600,  # 7 h — generous for 5k steps
     volumes={
         CKPT_DIR: ckpt_volume,
         DATA_DIR: data_volume,
-        OUT_DIR:  out_volume,
+        OUT_DIR: out_volume,
     },
     secrets=[modal.Secret.from_name("wandb-secret")],
 )
@@ -131,6 +132,14 @@ def train(
     data: str = "openwebtext-split",
     slerp_n_iter: int = 3,
     freeze_until: int = 0,
+    global_batch_size: int = 512,
+    batch_size: int = 16,
+    num_workers: int = 4,
+    val_check_interval: int = 200,
+    checkpoint_every_n_steps: int = 100,
+    freeze_transparency_head: bool = False,
+    fixed_lambda: float = -1.0,
+    log_every_n_steps: int = 3,
 ):
     import subprocess
     import shutil
@@ -141,7 +150,9 @@ def train(
         raise FileNotFoundError(
             f"Checkpoint not found at {base_ckpt}.\n"
             f"Upload it with:\n"
-            f"  modal volume put mdlm-checkpoints /local/path/mdlm.ckpt {base_ckpt_filename}"
+            f"  modal volume put mdlm-checkpoints /local/path/mdlm.ckpt {
+                base_ckpt_filename
+            }"
         )
 
     # The mounted source at LANGUAGE_DIR is read-only — setup.sh would fail
@@ -158,36 +169,91 @@ def train(
     else:
         print("[setup] DUO files present — skipping setup.sh")
 
+    # ── validate cached dataset dirs ──────────────────────────────────────────
+    # A previous crashed run can leave a .dat directory that exists but has
+    # incomplete Arrow files. fsspec_exists() returns True, load_from_disk()
+    # then raises FileNotFoundError. Detect and remove these before training.
+    import datasets as hf_datasets
+
+    owt_cache = f"{DATA_DIR}/owt_cache"
+    for dat_name in [
+        f"{data.replace('-split', '-train')}_train_bs1024_wrapped.dat",
+        f"{data.replace('-split', '-valid')}_valid_bs1024_wrapped.dat",
+    ]:
+        dat_path = os.path.join(owt_cache, dat_name)
+        if os.path.exists(dat_path):
+            try:
+                hf_datasets.load_from_disk(dat_path)
+                print(f"[cache] Valid: {dat_path}")
+            except Exception as e:
+                print(f"[cache] Corrupted ({e}) — removing: {dat_path}")
+                shutil.rmtree(dat_path, ignore_errors=True)
+
     # ── build the hydra command ───────────────────────────────────────────────
     alg_tag = "topk" if transparency_alg == "mixinputs_with_topk" else "slerp"
-    group    = f"slerp_vs_topk_v2_{model}_{data}_seed{seed}"
+    group = f"slerp_vs_topk_v2_{model}_{data}_seed{seed}"
     run_name = f"{alg_tag}-ft-v2-{model}-{data}-seed{seed}"
-    out_dir  = f"{OUT_DIR}/{group}/{alg_tag}"
+    out_dir = f"{OUT_DIR}/{group}/{alg_tag}"
+
+    if global_batch_size % batch_size != 0:
+        raise ValueError(
+            f"global_batch_size ({global_batch_size}) must be divisible by "
+            f"batch_size ({batch_size}) for this single-GPU launcher."
+        )
+    if fixed_lambda >= 0.0 and not 0.0 <= fixed_lambda <= 1.0:
+        raise ValueError(
+            f"fixed_lambda must lie in [0, 1] when set, got {fixed_lambda}"
+        )
+    accumulate_grad_batches = global_batch_size // batch_size
 
     cmd = [
-        sys.executable, "-u", "-m", "main",
+        sys.executable,
+        "-u",
+        "-m",
+        "main",
         "algo=mdlm_sm",
         f"model={model}",
         f"data={data}",
         f"data.cache_dir={DATA_DIR}/owt_cache",
         f"seed={seed}",
-        "loader.batch_size=32",
-        "loader.eval_batch_size=32",
+        f"loader.global_batch_size={global_batch_size}",
+        f"loader.eval_global_batch_size={global_batch_size}",
+        f"loader.batch_size={batch_size}",
+        f"loader.eval_batch_size={batch_size}",
+        # The default affinity-derived value can deadlock in Modal containers;
+        # a small fixed worker pool is much safer and keeps the GPU fed.
+        f"loader.num_workers={num_workers}",
+        # bypass ${device_count:} dynamic resolver — returns 0 before CUDA init
+        "trainer.devices=1",
         f"trainer.max_steps={max_steps}",
-        "trainer.val_check_interval=200",
-        "trainer.log_every_n_steps=50",
+        # Skip the extra validation warmup pass; on OWT it adds a lot of wall time
+        # before the first real training step.
+        "trainer.num_sanity_val_steps=0",
+        # Disable mid-training validation entirely: no validation loop runs
+        # between training steps (limit_val_batches=0 turns the val loop off, so
+        # val_check_interval is irrelevant).
+        "trainer.limit_val_batches=0",
+        # Show progress sooner. With grad accumulation each logged "step" is expensive.
+        f"trainer.log_every_n_steps={log_every_n_steps}",
         "optim.lr=3e-5",
         "optim.tran_head_lr=0.01",
         "optim.sm_prob=0.8",
+        # Soft-masking time band (original soft-masking paper): t in [0.2, 0.8].
+        "optim.sm_t_min=0.2",
+        "optim.sm_t_max=0.8",
         "lr_scheduler.num_warmup_steps=200",
         "sampling.predictor=sm",
         "strategy.find_unused_parameters=True",
         "eval.compute_generative_perplexity=False",
+        # sample generation OOMs on A100-40GB (6 GB for [batch,seq,vocab] Gumbel tensor)
+        "eval.generate_samples=False",
         "algo.tran_head.mixinputs_k=3",
         "algo.tran_head.init_scale=0.5",
-        "algo.tran_head.init_centre=-2.5",
+        "algo.tran_head.init_centre=-4",
+        f"algo.tran_head.learnable={str(not freeze_transparency_head).lower()}",
         f"training.finetune_path={base_ckpt}",
         "checkpointing.resume_from_ckpt=false",
+        f"callbacks.checkpoint_every_n_steps.every_n_train_steps={checkpoint_every_n_steps}",
         f"wandb.group={group}",
         f"algo.tran_head.transparency_alg={transparency_alg}",
         f"wandb.name={run_name}",
@@ -197,6 +263,8 @@ def train(
 
     if transparency_alg == "slerp_sm":
         cmd.append(f"algo.tran_head.slerp_n_iter={slerp_n_iter}")
+    if fixed_lambda >= 0.0:
+        cmd.append(f"algo.tran_head.fixed_lambda={fixed_lambda}")
 
     if freeze_until > 0:
         cmd += [
@@ -206,28 +274,54 @@ def train(
 
     print(f"[train] Starting: {run_name}")
     print(f"[train] Output dir: {out_dir}")
+    print(
+        "[train] Effective schedule: "
+        f"global_batch_size={global_batch_size}, batch_size={batch_size}, "
+        f"accumulate_grad_batches={accumulate_grad_batches}, "
+        f"mid-training validation disabled (limit_val_batches=0)"
+    )
+    print(f"[train] Checkpoint cadence: every {checkpoint_every_n_steps} global steps")
+    print(f"[train] Transparency head learnable: {not freeze_transparency_head}")
+    if fixed_lambda >= 0.0:
+        print(f"[train] Fixed lambda override: {fixed_lambda}")
+    # expandable_segments avoids fragmentation OOMs: PyTorch reserves ~21 GB of
+    # freed memory in small chunks; without this flag it can't satisfy a
+    # contiguous 6 GB alloc even though total free > 6 GB.
+    env = os.environ.copy()
+    env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
     try:
-        subprocess.run(cmd, check=True, cwd=work_dir)
+        subprocess.run(cmd, check=True, cwd=work_dir, env=env)
     finally:
-        # Persist outputs even on crash so partial logs/checkpoints survive
-        out_volume.commit()
+        # data first — persists the tokenized .dat files so next run skips
+        # the 30-min OWT download+tokenize phase.
         data_volume.commit()
+        # then outputs — checkpoints and logs.
+        out_volume.commit()
     print(f"[train] Done. Outputs saved to volume at {out_dir}")
 
 
 # ── local entrypoint ──────────────────────────────────────────────────────────
 
+
 @app.local_entrypoint()
 def main(
-    alg: str = "both",               # "topk" | "slerp" | "both"
+    alg: str = "both",  # "topk" | "slerp" | "both"
     base_ckpt: str = "mdlm_owt.ckpt",
     seed: int = 1,
     max_steps: int = 5000,
     model: str = "small",
     data: str = "openwebtext-split",
     slerp_n_iter: int = 3,
-    freeze_until: int = 0,           # >0 enables FreezeBackboneCallback
-    parallel: bool = False,          # True = two A100s simultaneously
+    freeze_until: int = 0,  # >0 enables FreezeBackboneCallback
+    parallel: bool = False,  # True = two A100s simultaneously
+    global_batch_size: int = 512,
+    batch_size: int = 16,
+    num_workers: int = 4,
+    val_check_interval: int = 200,
+    checkpoint_every_n_steps: int = 100,
+    freeze_transparency_head: bool = False,
+    fixed_lambda: float = -1.0,
+    log_every_n_steps: int = 10,
 ):
     kwargs = dict(
         base_ckpt_filename=base_ckpt,
@@ -237,6 +331,14 @@ def main(
         data=data,
         slerp_n_iter=slerp_n_iter,
         freeze_until=freeze_until,
+        global_batch_size=global_batch_size,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        val_check_interval=val_check_interval,
+        checkpoint_every_n_steps=checkpoint_every_n_steps,
+        freeze_transparency_head=freeze_transparency_head,
+        fixed_lambda=fixed_lambda,
+        log_every_n_steps=log_every_n_steps,
     )
 
     algs = []
@@ -258,4 +360,8 @@ def main(
             train.remote(a, **kwargs)
 
     print("\n[local] All runs complete.")
-    print(f"[local] Download outputs:  modal volume get mdlm-outputs {OUT_DIR}/<group> ./local_outputs/")
+    print(
+        f"[local] Download outputs:  modal volume get mdlm-outputs {
+            OUT_DIR
+        }/<group> ./local_outputs/"
+    )
