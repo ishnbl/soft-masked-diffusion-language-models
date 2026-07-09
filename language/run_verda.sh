@@ -53,25 +53,33 @@ LOG_EVERY=3
 DATA_DIR="/workspace/data"
 OUT_DIR="/workspace/outputs"
 FIXED_LAMBDA=-1.0
+RELIABILITY_CONDITIONED="false"
+RELIABILITY_START=0.05
+RELIABILITY_FULL=0.25
+RELIABILITY_BETA=0.99
 
 # ── Parse arguments ───────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --num-gpus)            NUM_GPUS="$2";           shift 2 ;;
-    --base-ckpt)           BASE_CKPT="$2";          shift 2 ;;
-    --seed)                SEED="$2";               shift 2 ;;
-    --max-steps)           MAX_STEPS="$2";          shift 2 ;;
-    --model)               MODEL="$2";              shift 2 ;;
-    --data)                DATA="$2";               shift 2 ;;
-    --slerp-n-iter)        SLERP_N_ITER="$2";       shift 2 ;;
-    --global-batch-size)   GLOBAL_BATCH_SIZE="$2";  shift 2 ;;
-    --batch-size)          BATCH_SIZE="$2";         shift 2 ;;
-    --num-workers)         NUM_WORKERS="$2";        shift 2 ;;
-    --checkpoint-every)    CHECKPOINT_EVERY="$2";   shift 2 ;;
-    --log-every)           LOG_EVERY="$2";          shift 2 ;;
-    --data-dir)            DATA_DIR="$2";           shift 2 ;;
-    --out-dir)             OUT_DIR="$2";            shift 2 ;;
-    --fixed-lambda)        FIXED_LAMBDA="$2";       shift 2 ;;
+    --num-gpus)                NUM_GPUS="$2";               shift 2 ;;
+    --base-ckpt)               BASE_CKPT="$2";              shift 2 ;;
+    --seed)                    SEED="$2";                   shift 2 ;;
+    --max-steps)               MAX_STEPS="$2";              shift 2 ;;
+    --model)                   MODEL="$2";                  shift 2 ;;
+    --data)                    DATA="$2";                   shift 2 ;;
+    --slerp-n-iter)            SLERP_N_ITER="$2";           shift 2 ;;
+    --global-batch-size)       GLOBAL_BATCH_SIZE="$2";      shift 2 ;;
+    --batch-size)              BATCH_SIZE="$2";             shift 2 ;;
+    --num-workers)             NUM_WORKERS="$2";            shift 2 ;;
+    --checkpoint-every)        CHECKPOINT_EVERY="$2";       shift 2 ;;
+    --log-every)               LOG_EVERY="$2";              shift 2 ;;
+    --data-dir)                DATA_DIR="$2";               shift 2 ;;
+    --out-dir)                 OUT_DIR="$2";                shift 2 ;;
+    --fixed-lambda)            FIXED_LAMBDA="$2";           shift 2 ;;
+    --reliability-conditioned) RELIABILITY_CONDITIONED="$2"; shift 2 ;;
+    --reliability-start)       RELIABILITY_START="$2";       shift 2 ;;
+    --reliability-full)        RELIABILITY_FULL="$2";        shift 2 ;;
+    --reliability-beta)        RELIABILITY_BETA="$2";        shift 2 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
@@ -160,6 +168,10 @@ CMD=(
   algo.tran_head.mixinputs_k=3
   algo.tran_head.init_scale=0.5
   algo.tran_head.init_centre=-4
+  algo.tran_head.reliability_conditioned="${RELIABILITY_CONDITIONED}"
+  algo.tran_head.reliability_start="${RELIABILITY_START}"
+  algo.tran_head.reliability_full="${RELIABILITY_FULL}"
+  algo.tran_head.reliability_beta="${RELIABILITY_BETA}"
   model="${MODEL}"
   data="${DATA}"
   data.cache_dir="${DATA_DIR}/owt_cache"
