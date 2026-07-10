@@ -59,6 +59,7 @@ RELIABILITY_FULL=0.25
 RELIABILITY_BETA=0.99
 INIT_CENTRE=-10.0
 SM_PROB_WARMUP_STEPS=0
+EXTRA_HYDRA_ARGS=()
 
 # ── Parse arguments ───────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -84,7 +85,7 @@ while [[ $# -gt 0 ]]; do
     --reliability-beta)        RELIABILITY_BETA="$2";        shift 2 ;;
     --init-centre)             INIT_CENTRE="$2";             shift 2 ;;
     --sm-prob-warmup-steps)    SM_PROB_WARMUP_STEPS="$2";    shift 2 ;;
-    *) echo "Unknown arg: $1"; exit 1 ;;
+    *) EXTRA_HYDRA_ARGS+=("$1"); shift ;;
   esac
 done
 
@@ -228,7 +229,7 @@ if python -c "import sys; sys.exit(0 if float('${FIXED_LAMBDA}') >= 0.0 else 1)"
   echo "[train] Fixed lambda override: ${FIXED_LAMBDA}"
 fi
 
-"${CMD[@]}"
+"${CMD[@]}" "${EXTRA_HYDRA_ARGS[@]}"
 
 echo ""
 echo "[done] Outputs saved to: $RUN_OUT_DIR"

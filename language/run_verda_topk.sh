@@ -59,6 +59,7 @@ RELIABILITY_CONDITIONED="false"
 RELIABILITY_START=0.05
 RELIABILITY_FULL=0.25
 RELIABILITY_BETA=0.99
+EXTRA_HYDRA_ARGS=()
 
 # ── Parse arguments ───────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -81,7 +82,7 @@ while [[ $# -gt 0 ]]; do
     --reliability-start)       RELIABILITY_START="$2";       shift 2 ;;
     --reliability-full)        RELIABILITY_FULL="$2";        shift 2 ;;
     --reliability-beta)        RELIABILITY_BETA="$2";        shift 2 ;;
-    *) echo "Unknown arg: $1"; exit 1 ;;
+    *) EXTRA_HYDRA_ARGS+=("$1"); shift ;;
   esac
 done
 
@@ -222,7 +223,7 @@ if python -c "import sys; sys.exit(0 if float('${FIXED_LAMBDA}') >= 0.0 else 1)"
   echo "[train] Fixed lambda override: ${FIXED_LAMBDA}"
 fi
 
-"${CMD[@]}"
+"${CMD[@]}" "${EXTRA_HYDRA_ARGS[@]}"
 
 echo ""
 echo "[done] Outputs saved to: $RUN_OUT_DIR"
