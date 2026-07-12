@@ -86,6 +86,7 @@ FIXED_LAMBDA=-1.0
 INIT_CENTRE=-2.5
 
 # ── Parse arguments ───────────────────────────────────────────
+EXTRA_HYDRA_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --num-gpus)            NUM_GPUS="$2";            shift 2 ;;
@@ -108,7 +109,7 @@ while [[ $# -gt 0 ]]; do
     --fixed-lambda)        FIXED_LAMBDA="$2";         shift 2 ;;
     --init-centre)         INIT_CENTRE="$2";          shift 2 ;;
     --resume-from-ckpt)    RESUME_FROM_CKPT="$2";     shift 2 ;;
-    *) echo "Unknown arg: $1"; exit 1 ;;
+    *) EXTRA_HYDRA_ARGS+=("$1"); shift ;;
   esac
 done
 
@@ -244,7 +245,7 @@ if python -c "import sys; sys.exit(0 if float('${FIXED_LAMBDA}') >= 0.0 else 1)"
   echo "[train] Fixed lambda override: ${FIXED_LAMBDA}"
 fi
 
-"${CMD[@]}"
+"${CMD[@]}" "${EXTRA_HYDRA_ARGS[@]}"
 
 echo ""
 echo "[done] Outputs saved to: $RUN_OUT_DIR"
