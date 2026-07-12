@@ -8,7 +8,7 @@
 
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate sm-env
-export WANDB_API_KEY=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
+# export WANDB_API_KEY=your_key_here
 export WANDB_PROJECT=pretraining
 cd "$HOME/mdlm/soft-masked-diffusion-language-models/language"
 
