@@ -8,7 +8,13 @@
 
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate sm-env
-# export WANDB_API_KEY=your_key_here
+# Load API keys from gitignored .env file if it exists
+if [ -f ../.env ]; then
+  export $(cat ../.env | grep -v '#' | xargs)
+elif [ -f .env ]; then
+  export $(cat .env | grep -v '#' | xargs)
+fi
+
 export WANDB_PROJECT=pretraining
 cd "$HOME/mdlm/soft-masked-diffusion-language-models/language"
 
