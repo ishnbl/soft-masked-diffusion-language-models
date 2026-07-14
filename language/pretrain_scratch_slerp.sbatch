@@ -4,7 +4,7 @@
 #SBATCH --gres=gpu:2
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
-#SBATCH --time=24:00:00
+#SBATCH --time=0
 #SBATCH --output=mdlm-scratch-slerp-%j.out
 
 # Activate conda environment (matches environment setup in README)
@@ -23,7 +23,7 @@ bash run_verda.sh \
   --reliability-start 0.05 \
   --reliability-full 0.25 \
   --reliability-beta 0.99 \
-  --init-centre -10.0 \
+  --init-centre -9.7 \
   --data-dir "$HOME/sm_data" \
   --out-dir "$HOME/sm_outputs" \
   "$@"
