@@ -23,5 +23,5 @@ bash scripts/from_scratch/run_scratch_slerp.sh \
   --data-dir /home/aryan_s2/sm_data \
   --val-check-interval 200000 \
   --out-dir /home/aryan_s2/sm_outputs \
-  --resume-from-ckpt true \
+  --resume-from-ckpt false \
   --fixed-lambda 0.0 "$@"
