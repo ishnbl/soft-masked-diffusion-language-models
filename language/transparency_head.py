@@ -108,10 +108,6 @@ def slerp_sm_feedback(
     mask_norm = mask_emb.norm()  # scalar
     mhat = F.normalize(mask_emb, dim=-1, eps=eps).expand_as(mu)  # (M, D)
 
-    # Top-k norms to interpolate magnitude
-    topk_norms = E[topk_indices].to(compute_dtype).norm(dim=-1)  # (M, k)
-    mu_norm = (pi * topk_norms).sum(-1, keepdim=True)  # (M, 1)
-
     # SLERP(m_hat, mu*, lambda).
     cos = (mhat * mu).sum(-1, keepdim=True).clamp(-1 + eps, 1 - eps)  # (M, 1)
     omega = torch.acos(cos)  # (M, 1)
@@ -130,9 +126,8 @@ def slerp_sm_feedback(
     lerp_normed = F.normalize(lerp, dim=-1, eps=1e-12)
     slerp = torch.where(use_lerp, lerp_normed, slerp)
     
-    # Rescale back to the interpolated norm instead of fixed mask norm
-    interpolated_norm = (1.0 - lam) * mask_norm + lam * mu_norm  # (M, 1)
-    slerp = slerp * interpolated_norm  # (M, D)
+    # Rescale back to the original mask-token norm
+    slerp = slerp * mask_norm  # (M, D)
 
     # Scatter slerp results back into the full (B,T,D) output tensor.
     out = out.index_put((mask_pos,), slerp)
