@@ -29,7 +29,8 @@ def frechet_mean_sphere(vhat, weights, n_iter, eps):
     w = weights.unsqueeze(-1)  # (..., k, 1)
     for _ in range(n_iter):
         # cos of the angle between mu and each v_i
-        cos = (mu.unsqueeze(-2) * vhat).sum(-1).clamp(-1 + eps, 1 - eps)  # (..., k)
+        dot = (mu.unsqueeze(-2) * vhat).sum(-1)  # (..., k)
+        cos = dot.clamp(-1 + eps, 1 - eps)
         omega = torch.acos(cos)  # (..., k)
         sin_omega = torch.sin(omega)
         # log map at mu: ratio = omega / sin(omega) -> 1 as omega -> 0
@@ -38,7 +39,7 @@ def frechet_mean_sphere(vhat, weights, n_iter, eps):
         ratio = torch.where(sin_omega > eps, omega / safe_sin_omega, torch.ones_like(omega))
         
         tang = ratio.unsqueeze(-1) * (
-            vhat - cos.unsqueeze(-1) * mu.unsqueeze(-2)
+            vhat - dot.unsqueeze(-1) * mu.unsqueeze(-2)
         )  # (..., k, D)
         tau = (w * tang).sum(-2)  # (..., D)
         tau_norm = tau.norm(dim=-1, keepdim=True)  # (..., 1)
@@ -107,6 +108,10 @@ def slerp_sm_feedback(
     mask_norm = mask_emb.norm()  # scalar
     mhat = F.normalize(mask_emb, dim=-1, eps=eps).expand_as(mu)  # (M, D)
 
+    # Top-k norms to interpolate magnitude
+    topk_norms = E[topk_indices].to(compute_dtype).norm(dim=-1)  # (M, k)
+    mu_norm = (pi * topk_norms).sum(-1, keepdim=True)  # (M, 1)
+
     # SLERP(m_hat, mu*, lambda).
     cos = (mhat * mu).sum(-1, keepdim=True).clamp(-1 + eps, 1 - eps)  # (M, 1)
     omega = torch.acos(cos)  # (M, 1)
@@ -125,8 +130,9 @@ def slerp_sm_feedback(
     lerp_normed = F.normalize(lerp, dim=-1, eps=1e-12)
     slerp = torch.where(use_lerp, lerp_normed, slerp)
     
-    # Rescale back to the original mask-token norm
-    slerp = slerp * mask_norm  # (M, D)
+    # Rescale back to the interpolated norm instead of fixed mask norm
+    interpolated_norm = (1.0 - lam) * mask_norm + lam * mu_norm  # (M, 1)
+    slerp = slerp * interpolated_norm  # (M, D)
 
     # Scatter slerp results back into the full (B,T,D) output tensor.
     out = out.index_put((mask_pos,), slerp)
