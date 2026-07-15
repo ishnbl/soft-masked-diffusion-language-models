@@ -104,11 +104,18 @@ def slerp_sm_feedback(
     omega = torch.acos(cos)  # (M, 1)
     sin_omega = torch.sin(omega)
     
-    # Since cos is clamped to [-1+eps, 1-eps], omega is in (0, pi), so omega > 0 and sin_omega > 0.
-    safe_sin_omega = torch.where(omega > eps, sin_omega, torch.ones_like(sin_omega))
-    coeff_m = torch.where(omega > eps, torch.sin((1 - lam) * omega) / safe_sin_omega, 1.0 - lam)
-    coeff_mu = torch.where(omega > eps, torch.sin(lam * omega) / safe_sin_omega, lam)
+    # Decoupled safe sin(omega) for division
+    safe_sin_omega = torch.where(sin_omega > eps, sin_omega, torch.ones_like(sin_omega))
+    coeff_m = torch.sin((1 - lam) * omega) / safe_sin_omega
+    coeff_mu = torch.sin(lam * omega) / safe_sin_omega
     slerp = coeff_m * mhat + coeff_mu * mu  # (M, D)
+    
+    # Fallback to normalized LERP when sin_omega is small (avoiding division by zero and gradient explosion)
+    use_lerp = sin_omega < 1e-2
+    lerp = (1.0 - lam) * mhat + lam * mu
+    # Use 1e-12 eps for normalization so the norm is not clamped prematurely by F.normalize's default 1e-6
+    lerp_normed = F.normalize(lerp, dim=-1, eps=1e-12)
+    slerp = torch.where(use_lerp, lerp_normed, slerp)
     
     # Rescale back to the original mask-token norm
     slerp = slerp * mask_norm  # (M, D)
