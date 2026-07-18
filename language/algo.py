@@ -98,6 +98,8 @@ class MDLM_SM(MDLM):
       if not self.tran_head.learnable:
           for param in self.tran_head.parameters():
               param.requires_grad = False
+      self._last_slerp_norm = None
+      self._last_standard_norm = None
 
   def _eval_mode(self):
       self.tran_head.eval()
@@ -169,6 +171,10 @@ class MDLM_SM(MDLM):
           self.log('transparency/lambda_std', self.tran_head.last_lambda_std.item(), on_step=True, on_epoch=False, sync_dist=True)
       if self.tran_head.last_slerp_angle_mean is not None:
           self.log('transparency/slerp_angle_mean', self.tran_head.last_slerp_angle_mean.item(), on_step=True, on_epoch=False, sync_dist=True)
+      if self._last_slerp_norm is not None:
+          self.log('transparency/slerp_embedding_norm', self._last_slerp_norm.item(), on_step=True, on_epoch=False, sync_dist=False)
+      if self._last_standard_norm is not None:
+          self.log('transparency/standard_embedding_norm', self._last_standard_norm.item(), on_step=True, on_epoch=False, sync_dist=False)
 
       return loss
 
@@ -194,11 +200,13 @@ class MDLM_SM(MDLM):
               # directly (B,T,D); the DIT embedding layer passes these through.
               embedding_matrix = self.backbone.vocab_embed.embedding
               p_x0_sm = self.tran_head(xt, log_p_x0, embedding_matrix=embedding_matrix)
+              self._last_slerp_norm = p_x0_sm.norm(dim=-1).mean().detach()
           else:
               p_x0_sm = self.tran_head(xt, log_p_x0)
           model_output = self.backbone(p_x0_sm, sigma=sigma_processed)
       else:
           # Standard forward pass if no previous prediction is available
+          self._last_standard_norm = self.backbone.vocab_embed.embedding[xt].norm(dim=-1).mean().detach()
           model_output = self.backbone(xt, sigma=sigma_processed)
 
     return self._process_model_output(model_output=model_output, xt=xt, sigma=sigma)
