@@ -178,7 +178,7 @@ class MDLM_SM(MDLM):
 
       return loss
 
-  def forward(self, xt, sigma, log_p_x0=None, _track_standard_norm=False):
+  def forward(self, xt, sigma, log_p_x0=None):
     """
     Performs a forward pass with the option of using soft-masking.
 
@@ -186,10 +186,6 @@ class MDLM_SM(MDLM):
         xt: The input tensor of token ids.
         sigma: The noise level for the current timestep.
         log_p_x0: The model output from the previous step, used for feedback.
-        _track_standard_norm: If True, record the mean token embedding norm
-            as the reference standard norm.  Set to True only on genuine
-            standard-path steps (gate off), NOT on the detached Pass-1 call
-            that precedes the SLERP Pass-2 step.
 
     Returns:
         The output logits from the model.
@@ -204,19 +200,18 @@ class MDLM_SM(MDLM):
               # directly (B,T,D); the DIT embedding layer passes these through.
               embedding_matrix = self.backbone.vocab_embed.embedding
               p_x0_sm = self.tran_head(xt, log_p_x0, embedding_matrix=embedding_matrix)
-              # Mean over token positions then over batch — same shape reduction
-              # as pretraining branch's _last_slerp_norm.
               self._last_slerp_norm = p_x0_sm.norm(dim=-1).mean().detach()
           else:
               p_x0_sm = self.tran_head(xt, log_p_x0)
           model_output = self.backbone(p_x0_sm, sigma=sigma_processed)
       else:
-          # Standard forward (either Pass-1 no-grad OR genuine standard path).
-          if _track_standard_norm:
-              # Record reference embedding norm ONLY on genuine standard steps.
-              self._last_standard_norm = (
-                  self.backbone.vocab_embed.embedding[xt].norm(dim=-1).mean().detach()
-              )
+          # Standard forward (Pass-1 no-grad OR genuine gate-off step).
+          # Always track the token embedding norm here, matching the pretraining
+          # branch: on soft-mask steps this records the Pass-1 (pre-SLERP) norm
+          # as the reference; on gate-off steps it is the true standard norm.
+          self._last_standard_norm = (
+              self.backbone.vocab_embed.embedding[xt].norm(dim=-1).mean().detach()
+          )
           model_output = self.backbone(xt, sigma=sigma_processed)
 
     return self._process_model_output(model_output=model_output, xt=xt, sigma=sigma)
@@ -278,23 +273,16 @@ class MDLM_SM(MDLM):
     in_band = (self.config.optim.sm_t_min <= t_mean <= self.config.optim.sm_t_max)
     use_soft_mask = sm_gate and in_band
 
-    # Reset norm trackers at the start of each training step so a stale value
-    # from the previous step is never logged on a step that doesn't set it.
-    self._last_slerp_norm = None
-    self._last_standard_norm = None
-
     if use_soft_mask:
         # Pass 1: Get predictions for feedback. No grad needed — avoids building
         # the full backward graph for a forward whose output is only used as data.
-        # _track_standard_norm=False: this is NOT a genuine standard step.
         with torch.no_grad():
-            log_x_theta_pass1 = self.forward(xt, sigma=sigma, _track_standard_norm=False)
+            log_x_theta_pass1 = self.forward(xt, sigma=sigma)
         # Pass 2: Main pass that computes the gradients and sets _last_slerp_norm.
         log_x_theta = self.forward(xt, sigma=sigma, log_p_x0=log_x_theta_pass1)
     else:
         # --- Standard Path (gate off, or batch is out of band) ---
-        # _track_standard_norm=True: record the reference token embedding norm.
-        log_x_theta = self.forward(xt, sigma=sigma, _track_standard_norm=True)
+        log_x_theta = self.forward(xt, sigma=sigma)
 
     utils.print_nans(log_x_theta, 'model_output')
 
