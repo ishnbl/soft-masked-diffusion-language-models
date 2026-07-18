@@ -18,11 +18,11 @@
 # ===========================================================================
 #SBATCH --job-name=sm-mdlm
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:4                 # TODO: GPUs per node (also the DDP world size)
+#SBATCH --gres=gpu:2                 # TODO: GPUs per node (also the DDP world size)
 #SBATCH --ntasks=1                   # one task; Lightning spawns the per-GPU procs
 #SBATCH --cpus-per-task=16           # TODO: ~4 dataloader workers/GPU
 #SBATCH --mem=128G                   # TODO: cluster-dependent
-#SBATCH --time=07:00:00              # TODO: walltime
+#SBATCH --time=168:00:00             # TODO: walltime
 #SBATCH --output=slurm-%x-%j.out
 ##SBATCH --partition=<PARTITION>     # TODO: uncomment + set
 ##SBATCH --account=<ACCOUNT>         # TODO: uncomment + set if your cluster needs it
@@ -32,16 +32,20 @@ set -euo pipefail
 # ── User config (override via --export=ALL,VAR=...) ────────────────────────
 ALG="${ALG:-slerp}"                                  # slerp | topk
 ENV_NAME="${ENV_NAME:-sm-env}"
-CONDA_HOME="${CONDA_HOME:-$HOME/miniconda3}"
+CONDA_HOME="${CONDA_HOME:-$HOME/.conda}"
 
-# Put these on SHARED, persistent storage (visible from the compute node).
-BASE_CKPT="${BASE_CKPT:-$HOME/checkpoints/mdlm_owt.ckpt}"
+# Persistent storage visible from the compute node.
+BASE_CKPT="${BASE_CKPT:-$HOME/mdlm/soft-masked-diffusion-language-models/mdlm.ckpt}"
 export DATA_CACHE_DIR="${DATA_CACHE_DIR:-$HOME/sm_data/owt_cache}"
 export OUT_ROOT="${OUT_ROOT:-$HOME/sm_outputs}"
 
-# Compute nodes are frequently air-gapped. Default W&B to offline; sync later
-# from the login node with `wandb sync $OUT_ROOT/.../wandb/offline-run-*`.
-export WANDB_MODE="${WANDB_MODE:-offline}"
+# Run hyperparameters — all exported so run_slerp.sh / run_topk.sh inherit them.
+export SEED="${SEED:-3}"
+export MAX_STEPS="${MAX_STEPS:--1}"           # -1 = unlimited
+export CHECKPOINT_EVERY="${CHECKPOINT_EVERY:-500}"
+
+# W&B — online since vitallab1 has internet access.
+export WANDB_MODE="${WANDB_MODE:-online}"
 
 # ── Activate the env built by setup_cluster.sh ─────────────────────────────
 if [[ ! -d "$CONDA_HOME" ]]; then

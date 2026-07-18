@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - /callbacks: [checkpoint_hf_offload, checkpoint_monitor, learning_rate_monitor]
+  - /callbacks: [checkpoint_hf_offload, checkpoint_monitor, learning_rate_monitor, checkpoint_every_n_steps]
   # - /callbacks: [checkpoint_monitor, learning_rate_monitor]
   - /data: openwebtext-split # changed to split default
   - /model: small
