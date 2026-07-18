@@ -32,7 +32,7 @@ set -euo pipefail
 # ── User config (override via --export=ALL,VAR=...) ────────────────────────
 ALG="${ALG:-slerp}"                                  # slerp | topk
 ENV_NAME="${ENV_NAME:-sm-env}"
-CONDA_HOME="${CONDA_HOME:-$HOME/.conda}"
+CONDA_HOME="${CONDA_HOME:-/opt/miniforge3}"
 
 # Persistent storage visible from the compute node.
 BASE_CKPT="${BASE_CKPT:-$HOME/mdlm/soft-masked-diffusion-language-models/mdlm.ckpt}"
