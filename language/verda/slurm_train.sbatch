@@ -55,10 +55,8 @@ fi
 source "${CONDA_HOME}/etc/profile.d/conda.sh"
 conda activate "$ENV_NAME"
 
-# ── Run from language/ (this script lives in language/verda/) ──────────────
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LANG_DIR="$(dirname "$SCRIPT_DIR")"
-cd "$LANG_DIR"
+# ── Run from language/ (using directory where sbatch command was run) ──────
+cd "$SLURM_SUBMIT_DIR"
 
 echo "[job] node=$(hostname)  ALG=${ALG}  CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
 nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader || true
