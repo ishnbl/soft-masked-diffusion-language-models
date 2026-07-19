@@ -42,12 +42,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LANG_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$LANG_DIR"
 
+# Ensure variables are defined for strict mode
+NUM_GPUS="${NUM_GPUS:-}"
+
 # --- Resolve GPU count + pin CUDA_VISIBLE_DEVICES ---------------------------
-# This codebase derives the world size from torch.cuda.device_count() (the Hydra
-# device_count: resolver + the dataloader's global==batch*device_count*accum
-# assertion), NOT trainer.devices. So we make device_count() == NUM_GPUS by
-# pinning CUDA_VISIBLE_DEVICES before any Python runs. If the caller already set
-# it, we honor it and derive NUM_GPUS from it.
 if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
   VISIBLE_N="$(awk -F, '{print NF}' <<<"$CUDA_VISIBLE_DEVICES")"
   if [[ -n "$NUM_GPUS" && "$NUM_GPUS" != "$VISIBLE_N" ]]; then
