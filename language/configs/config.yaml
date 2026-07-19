@@ -93,6 +93,7 @@ trainer:
 
 wandb:
   project: sm-mdlm
+  entity: null
   notes: Soft Masking MDLM
   group: null
   job_type: null
