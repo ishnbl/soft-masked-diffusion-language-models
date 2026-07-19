@@ -18,32 +18,31 @@
 #   SEED=2 MAX_STEPS=5000 GLOBAL_BATCH=512 PER_GPU_BATCH=16 bash verda/run_slerp.sh
 #
 # KNOBS (env vars, defaults match the Modal runner):
-# NUM_GPUS="${NUM_GPUS:-}"                       # default: all visible GPUs
-# SEED="${SEED:-1}"
-# MAX_STEPS="${MAX_STEPS:-5000}"
-# MODEL="${MODEL:-small}"
-# DATA="${DATA:-openwebtext-split}"
-# DATA_CACHE_DIR="${DATA_CACHE_DIR:-./data_cache/owt_cache}"
-# GLOBAL_BATCH="${GLOBAL_BATCH:-512}"
-# PER_GPU_BATCH="${PER_GPU_BATCH:-16}"
-# NUM_WORKERS="${NUM_WORKERS:-4}"
-# SLERP_N_ITER="${SLERP_N_ITER:-3}"
-# MIXINPUTS_K="${MIXINPUTS_K:-3}"
-# CHECKPOINT_EVERY="${CHECKPOINT_EVERY:-100}"
-# LOG_EVERY="${LOG_EVERY:-3}"
-# FIXED_LAMBDA="${FIXED_LAMBDA:--1.0}"           # >=0 pins lambda (must be in [0,1])
-# BASE_CKPT="${BASE_CKPT:-}"                      # REQUIRED: finetune-from checkpoint
-# OUT_ROOT="${OUT_ROOT:-./outputs}"
 
 set -euo pipefail
+
+# --- Establish strict defaults (matching original run_slerp.sh header) -------
+NUM_GPUS="${NUM_GPUS:-}"                       # default: all visible GPUs
+SEED="${SEED:-1}"
+MAX_STEPS="${MAX_STEPS:-5000}"
+MODEL="${MODEL:-small}"
+DATA="${DATA:-openwebtext-split}"
+DATA_CACHE_DIR="${DATA_CACHE_DIR:-./data_cache/owt_cache}"
+GLOBAL_BATCH="${GLOBAL_BATCH:-512}"
+PER_GPU_BATCH="${PER_GPU_BATCH:-16}"
+NUM_WORKERS="${NUM_WORKERS:-4}"
+SLERP_N_ITER="${SLERP_N_ITER:-3}"
+MIXINPUTS_K="${MIXINPUTS_K:-3}"
+CHECKPOINT_EVERY="${CHECKPOINT_EVERY:-100}"
+LOG_EVERY="${LOG_EVERY:-3}"
+FIXED_LAMBDA="${FIXED_LAMBDA:--1.0}"           # >=0 pins lambda (must be in [0,1])
+BASE_CKPT="${BASE_CKPT:-}"                      # REQUIRED: finetune-from checkpoint
+OUT_ROOT="${OUT_ROOT:-./outputs}"
 
 # Run from language/ (this script lives in language/verda/).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LANG_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$LANG_DIR"
-
-# Ensure variables are defined for strict mode
-NUM_GPUS="${NUM_GPUS:-}"
 
 # --- Resolve GPU count + pin CUDA_VISIBLE_DEVICES ---------------------------
 if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
