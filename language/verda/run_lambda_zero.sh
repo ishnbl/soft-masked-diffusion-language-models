@@ -28,6 +28,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LANG_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$LANG_DIR"
 
+# Ensure the current directory is in PYTHONPATH so Python can resolve imports correctly
+export PYTHONPATH="${LANG_DIR}:${PYTHONPATH:-}"
+
 # --- Resolve GPU count + pin CUDA_VISIBLE_DEVICES ---------------------------
 if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
   VISIBLE_N="$(awk -F, '{print NF}' <<<"$CUDA_VISIBLE_DEVICES")"
