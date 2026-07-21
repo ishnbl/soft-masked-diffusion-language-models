@@ -19,6 +19,7 @@ PER_GPU_BATCH="${PER_GPU_BATCH:-16}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
 LOG_EVERY="${LOG_EVERY:-3}"
 BASE_CKPT="${BASE_CKPT:-}"                      # REQUIRED: finetune-from checkpoint
+CHECKPOINT_EVERY="${CHECKPOINT_EVERY:-500}"
 OUT_ROOT="${OUT_ROOT:-./outputs}"
 
 set -euo pipefail
@@ -100,12 +101,7 @@ ARGS=(
   eval.generate_samples=False
   training.finetune_path="$BASE_CKPT"
   checkpointing.resume_from_ckpt=false
-  # Disable step checkpoints
-  callbacks.checkpoint_every_n_steps.save_top_k=0
-  callbacks.checkpoint_every_n_steps.save_last=False
-  # Configure monitor checkpoint to only save the last checkpoint
-  callbacks.checkpoint_monitor.save_top_k=0
-  callbacks.checkpoint_monitor.save_last=True
+  callbacks.checkpoint_every_n_steps.every_n_train_steps="$CHECKPOINT_EVERY"
   wandb.project="finetune-main"
   wandb.entity="slerp-on-smdlm"
   wandb.group="$GROUP"
