@@ -1,27 +1,13 @@
 #!/bin/bash
 #
-# verda/run_slerp.sh — single-node multi-GPU SLERP (`slerp_sm`) launcher for a
-# Verda GPU VM. Hydra args mirror run_modal_multigpu.py EXACTLY, so a VM run
-# reproduces the Modal run (same init, same soft-mask band, validation disabled,
-# fixed-lambda support). This is the slerp counterpart to verda/run_topk.sh and
-# shares no state with it.
-#
-# DDP-safety: the soft-mask gate (algo.py MDLM_SM.nll) decides the branch
-# identically on every rank (step-seeded Bernoulli + globally all-reduced
-# t-band), so all ranks stay in sync. find_unused_parameters=True is required
-# because tran_head params receive no grad on non-soft-mask steps (on ALL ranks).
+# verda/run_normal_mdlm.sh — single-node multi-GPU launcher for a normal MDLM run
+# with no intermediate step or validation checkpoints (only saving last.ckpt).
 #
 # USAGE (from language/, env activated):
-#   BASE_CKPT=/data/mdlm_owt.ckpt bash verda/run_slerp.sh
-#   NUM_GPUS=4 BASE_CKPT=/data/mdlm_owt.ckpt bash verda/run_slerp.sh
-#   FIXED_LAMBDA=0.5 BASE_CKPT=/data/mdlm_owt.ckpt bash verda/run_slerp.sh
-#   SEED=2 MAX_STEPS=5000 GLOBAL_BATCH=512 PER_GPU_BATCH=16 bash verda/run_slerp.sh
+#   BASE_CKPT=/data/mdlm_owt.ckpt bash verda/run_normal_mdlm.sh
+#   NUM_GPUS=2 BASE_CKPT=/data/mdlm_owt.ckpt bash verda/run_normal_mdlm.sh
 #
-# KNOBS (env vars, defaults match the Modal runner):
-
-set -euo pipefail
-
-# --- Establish strict defaults (matching original run_slerp.sh header) -------
+# KNOBS (env vars):
 NUM_GPUS="${NUM_GPUS:-}"                       # default: all visible GPUs
 SEED="${SEED:-1}"
 MAX_STEPS="${MAX_STEPS:-5000}"
@@ -31,13 +17,11 @@ DATA_CACHE_DIR="${DATA_CACHE_DIR:-./data_cache/owt_cache}"
 GLOBAL_BATCH="${GLOBAL_BATCH:-512}"
 PER_GPU_BATCH="${PER_GPU_BATCH:-16}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
-SLERP_N_ITER="${SLERP_N_ITER:-3}"
-MIXINPUTS_K="${MIXINPUTS_K:-3}"
-CHECKPOINT_EVERY="${CHECKPOINT_EVERY:-100}"
 LOG_EVERY="${LOG_EVERY:-3}"
-FIXED_LAMBDA="${FIXED_LAMBDA:--1.0}"           # >=0 pins lambda (must be in [0,1])
 BASE_CKPT="${BASE_CKPT:-}"                      # REQUIRED: finetune-from checkpoint
 OUT_ROOT="${OUT_ROOT:-./outputs}"
+
+set -euo pipefail
 
 # Run from language/ (this script lives in language/verda/).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -62,7 +46,6 @@ else
   if [[ "$NUM_GPUS" -gt "$TOTAL_N" ]]; then
     echo "[preflight] requested NUM_GPUS=${NUM_GPUS} but only ${TOTAL_N} GPU(s) exist."; exit 1
   fi
-  # Pin to the first N GPUs so device_count() returns exactly NUM_GPUS
   GPUS_SEQ="$(seq -s, 0 $((NUM_GPUS - 1)))"
   export CUDA_VISIBLE_DEVICES="$GPUS_SEQ"
   echo "[preflight] setting CUDA_VISIBLE_DEVICES=${GPUS_SEQ} to restrict device_count()"
@@ -82,37 +65,18 @@ if [[ $(( GLOBAL_BATCH % (NUM_GPUS * PER_GPU_BATCH) )) -ne 0 ]]; then
 fi
 ACCUM=$(( GLOBAL_BATCH / (NUM_GPUS * PER_GPU_BATCH) ))
 
-# Validate FIXED_LAMBDA
-if ! python -c "
-v = float('${FIXED_LAMBDA}')
-if v >= 0.0 and not 0.0 <= v <= 1.0:
-    import sys; sys.stderr.write('ERROR: FIXED_LAMBDA must lie in [0, 1], got ' + str(v) + '\n'); sys.exit(1)
-"; then
-  exit 1
-fi
-
 # Prepare Output Directories
-GROUP="slerp_mg_${NUM_GPUS}gpu_${MODEL}_${DATA}_seed${SEED}"
-RUN_NAME="slerp-mg-${NUM_GPUS}gpu-${MODEL}-${DATA}-seed${SEED}"
+GROUP="mdlm_mg_${NUM_GPUS}gpu_${MODEL}_${DATA}_seed${SEED}"
+RUN_NAME="mdlm-mg-${NUM_GPUS}gpu-${MODEL}-${DATA}-seed${SEED}"
 OUT_DIR="${OUT_ROOT}/${GROUP}"
 mkdir -p "$OUT_DIR"
 
-echo "[config] alg=slerp_sm  GPUs=${NUM_GPUS}  per-GPU=${PER_GPU_BATCH}  accum=${ACCUM}  global=${GLOBAL_BATCH}"
+echo "[config] alg=mdlm  GPUs=${NUM_GPUS}  per-GPU=${PER_GPU_BATCH}  accum=${ACCUM}  global=${GLOBAL_BATCH}"
 echo "[config] seed=${SEED}  steps=${MAX_STEPS}  ckpt=${BASE_CKPT}"
 echo "[config] out_dir=${OUT_DIR}"
 
-USE_FL=0
-if python -c "import sys; sys.exit(0 if float('${FIXED_LAMBDA}') >= 0.0 else 1)" 2>/dev/null; then
-  USE_FL=1
-fi
-
 ARGS=(
-  algo=mdlm_sm
-  algo.tran_head.transparency_alg=slerp_sm
-  algo.tran_head.slerp_n_iter="$SLERP_N_ITER"
-  algo.tran_head.mixinputs_k="$MIXINPUTS_K"
-  algo.tran_head.init_scale=0.5
-  algo.tran_head.init_centre=-4.446
+  algo=mdlm
   model="$MODEL"
   data="$DATA"
   data.cache_dir="$DATA_CACHE_DIR"
@@ -123,7 +87,7 @@ ARGS=(
   loader.eval_batch_size="$PER_GPU_BATCH"
   loader.num_workers="$NUM_WORKERS"
   strategy=ddp
-  strategy.find_unused_parameters=True
+  strategy.find_unused_parameters=False
   trainer.devices="$NUM_GPUS"
   trainer.num_nodes=1
   trainer.max_steps="$MAX_STEPS"
@@ -131,17 +95,17 @@ ARGS=(
   trainer.limit_val_batches=0
   trainer.log_every_n_steps="$LOG_EVERY"
   optim.lr=3e-5
-  optim.tran_head_lr=0.01
-  optim.sm_prob=0.8
-  optim.sm_t_min=0.2
-  optim.sm_t_max=0.8
   lr_scheduler.num_warmup_steps=200
-  sampling.predictor=sm
   eval.compute_generative_perplexity=False
   eval.generate_samples=False
   training.finetune_path="$BASE_CKPT"
   checkpointing.resume_from_ckpt=false
-  callbacks.checkpoint_every_n_steps.every_n_train_steps="$CHECKPOINT_EVERY"
+  # Disable step checkpoints
+  callbacks.checkpoint_every_n_steps.save_top_k=0
+  callbacks.checkpoint_every_n_steps.save_last=False
+  # Configure monitor checkpoint to only save the last checkpoint
+  callbacks.checkpoint_monitor.save_top_k=0
+  callbacks.checkpoint_monitor.save_last=True
   wandb.project="finetune-main"
   wandb.entity="slerp-on-smdlm"
   wandb.group="$GROUP"
@@ -149,7 +113,6 @@ ARGS=(
   ++hydra.run.dir="$OUT_DIR"
   ++checkpointing.save_dir="$OUT_DIR"
 )
-[[ "$USE_FL" == "1" ]] && ARGS+=( algo.tran_head.fixed_lambda="$FIXED_LAMBDA" )
 
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 set -x

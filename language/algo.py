@@ -159,6 +159,7 @@ class MDLM_SM(MDLM):
       loss = super().training_step(batch, batch_idx)
 
       # Log the learnable transparency parameters.
+      self.log('step', float(self.global_step), on_step=True, on_epoch=False, sync_dist=False)
       self.log('transparency/scale', self.tran_head.scale.item(), on_step=True, on_epoch=False, sync_dist=False)
       self.log('transparency/centre', self.tran_head.centre.item(), on_step=True, on_epoch=False, sync_dist=False)
       self.log('transparency/steepness', self.tran_head.steepness.item(), on_step=True, on_epoch=False, sync_dist=False)
