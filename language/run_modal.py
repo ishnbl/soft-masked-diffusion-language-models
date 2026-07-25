@@ -186,8 +186,9 @@ def train(
                 hf_datasets.load_from_disk(dat_path)
                 print(f"[cache] Valid: {dat_path}")
             except Exception as e:
-                print(f"[cache] Corrupted ({e}) — removing: {dat_path}")
-                shutil.rmtree(dat_path, ignore_errors=True)
+                raise RuntimeError(f"Cache corrupted at {dat_path}: {e}. Aborting to prevent re-tokenization costs.")
+        else:
+            raise FileNotFoundError(f"Cache directory not found at {dat_path}. Aborting to prevent re-tokenization costs.")
 
     # ── build the hydra command ───────────────────────────────────────────────
     alg_tag = "topk" if transparency_alg == "mixinputs_with_topk" else "slerp"
