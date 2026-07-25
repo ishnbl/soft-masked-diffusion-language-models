@@ -1,0 +1,6 @@
+outputs/slerp_vs_topk_v2_small_openwebtext-split_seed1/slerp/checkpoints/
+data_cache/
+wandb/
+.git/
+__pycache__/
+*.log
