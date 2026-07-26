@@ -178,7 +178,7 @@ def train(
     owt_cache = f"{DATA_DIR}/owt_cache"
     for dat_name in [
         f"{data.replace('-split', '-train')}_train_bs1024_wrapped.dat",
-        f"{data.replace('-split', '-valid')}_valid_bs1024_wrapped.dat",
+        f"{data.replace('-split', '-valid')}_validation_bs1024_wrapped.dat",
     ]:
         dat_path = os.path.join(owt_cache, dat_name)
         if os.path.exists(dat_path):
