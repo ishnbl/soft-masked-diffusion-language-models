@@ -182,19 +182,6 @@ class MDLM_SM(MDLM):
           self.log('transparency/slerp_embedding_norm', self._last_slerp_norm.item(), on_step=True, on_epoch=False, sync_dist=False)
       if self._last_standard_norm is not None:
           self.log('transparency/standard_embedding_norm', self._last_standard_norm.item(), on_step=True, on_epoch=False, sync_dist=False)
-
-      # Periodic WandB histogram logging of feedback embedding norms at masked positions
-      if self.global_step % 100 == 0 and getattr(self.tran_head, "last_feedback_norms", None) is not None:
-          try:
-              if hasattr(self, "logger") and hasattr(self.logger, "experiment") and hasattr(self.logger.experiment, "log"):
-                  import wandb
-                  if isinstance(self.logger.experiment, wandb.sdk.wandb_run.Run):
-                      self.logger.experiment.log({
-                          "transparency/feedback_norm_histogram": wandb.Histogram(self.tran_head.last_feedback_norms.cpu().float().numpy())
-                      }, step=self.global_step)
-          except Exception:
-              pass
-
       return loss
 
   def forward(self, xt, sigma, log_p_x0=None):
