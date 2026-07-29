@@ -64,9 +64,10 @@ nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader || true
 # The launchers read the GPU count from CUDA_VISIBLE_DEVICES (set by SLURM via
 # --gres), so we deliberately do NOT pass NUM_GPUS.
 case "$ALG" in
-  slerp) LAUNCHER="verda/run_slerp.sh" ;;
-  topk)  LAUNCHER="verda/run_topk.sh" ;;
-  *) echo "[job] ALG must be 'slerp' or 'topk', got '${ALG}'"; exit 1 ;;
+  slerp)       LAUNCHER="verda/run_slerp.sh" ;;
+  topk)        LAUNCHER="verda/run_topk.sh" ;;
+  lerp_renorm) LAUNCHER="verda/run_lerp_renorm.sh" ;;
+  *) echo "[job] ALG must be 'slerp', 'topk', or 'lerp_renorm', got '${ALG}'"; exit 1 ;;
 esac
 
 echo "[job] launching ${LAUNCHER}"
