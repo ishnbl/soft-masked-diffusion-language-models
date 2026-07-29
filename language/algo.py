@@ -172,10 +172,28 @@ class MDLM_SM(MDLM):
           self.log('transparency/lambda_std', self.tran_head.last_lambda_std.item(), on_step=True, on_epoch=False, sync_dist=True)
       if self.tran_head.last_slerp_angle_mean is not None:
           self.log('transparency/slerp_angle_mean', self.tran_head.last_slerp_angle_mean.item(), on_step=True, on_epoch=False, sync_dist=True)
+      if self.tran_head.last_feedback_norm_mean is not None:
+          self.log('transparency/feedback_embedding_norm_mean', self.tran_head.last_feedback_norm_mean.item(), on_step=True, on_epoch=False, sync_dist=True)
+      if self.tran_head.last_feedback_norm_std is not None:
+          self.log('transparency/feedback_embedding_norm_std', self.tran_head.last_feedback_norm_std.item(), on_step=True, on_epoch=False, sync_dist=True)
+      if self.tran_head.last_raw_lerp_norm_mean is not None:
+          self.log('transparency/raw_lerp_norm_mean', self.tran_head.last_raw_lerp_norm_mean.item(), on_step=True, on_epoch=False, sync_dist=True)
       if self._last_slerp_norm is not None:
           self.log('transparency/slerp_embedding_norm', self._last_slerp_norm.item(), on_step=True, on_epoch=False, sync_dist=False)
       if self._last_standard_norm is not None:
           self.log('transparency/standard_embedding_norm', self._last_standard_norm.item(), on_step=True, on_epoch=False, sync_dist=False)
+
+      # Periodic WandB histogram logging of feedback embedding norms at masked positions
+      if self.global_step % 100 == 0 and getattr(self.tran_head, "last_feedback_norms", None) is not None:
+          try:
+              if hasattr(self, "logger") and hasattr(self.logger, "experiment") and hasattr(self.logger.experiment, "log"):
+                  import wandb
+                  if isinstance(self.logger.experiment, wandb.sdk.wandb_run.Run):
+                      self.logger.experiment.log({
+                          "transparency/feedback_norm_histogram": wandb.Histogram(self.tran_head.last_feedback_norms.cpu().float().numpy())
+                      }, step=self.global_step)
+          except Exception:
+              pass
 
       return loss
 
@@ -195,13 +213,13 @@ class MDLM_SM(MDLM):
 
     with torch.cuda.amp.autocast(dtype=torch.float32):
       if log_p_x0 is not None:
-          # Pass 2 — soft-masked forward; track the SLERP output norm.
-          if self.tran_head.transparency_alg == "slerp_sm":
-              # SLERP feedback works in embedding space and returns inputs_embeds
-              # directly (B,T,D); the DIT embedding layer passes these through.
+          # Pass 2 — soft-masked forward; track the feedback output norm.
+          if self.tran_head.transparency_alg in ("slerp_sm", "lerp_renorm", "mixinputs_with_topk"):
+              # Soft feedback works in embedding space / requires embedding table for norm tracking
               embedding_matrix = self.backbone.vocab_embed.embedding
               p_x0_sm = self.tran_head(xt, log_p_x0, embedding_matrix=embedding_matrix)
-              self._last_slerp_norm = p_x0_sm.norm(dim=-1).mean().detach()
+              if isinstance(p_x0_sm, torch.Tensor):
+                  self._last_slerp_norm = p_x0_sm.norm(dim=-1).mean().detach()
           else:
               p_x0_sm = self.tran_head(xt, log_p_x0)
           model_output = self.backbone(p_x0_sm, sigma=sigma_processed)

@@ -117,8 +117,73 @@ def slerp_sm_feedback(input_ids, logits, embedding_matrix, mask_token_id,
 
     if stats is not None:
         stats["slerp_angle_mean"] = omega.squeeze(-1).mean().detach()
+        slerp_norms = slerp.norm(dim=-1).detach()
+        stats["feedback_norm_mean"] = slerp_norms.mean()
+        stats["feedback_norm_std"] = slerp_norms.std(unbiased=False)
+        stats["feedback_norms"] = slerp_norms
 
     return out.to(embedding_matrix.dtype)
+
+
+def lerp_renorm_sm_feedback(input_ids, logits, embedding_matrix, mask_token_id,
+                            lambda_tensor, top_k, eps=1e-6, stats=None):
+    """
+    Norm-Renormalized LERP feedback in embedding space.
+
+    For each masked position we compute the convex linear combination between the
+    mask-token embedding and the top-k predicted target embeddings, then explicitly
+    renormalize the resulting vector back to the original mask-token norm.
+
+    input_ids:        (B, T)     current (partially masked) token ids
+    logits:           (B, T, V)  feedback logits from the previous pass
+    embedding_matrix: (V, D)     token embedding table E
+    lambda_tensor:    (B, T, 1)  LERP weight, 0 on non-mask positions
+    stats:            optional dict; gets feedback norm metrics for live logging
+    Returns:          (B, T, D)  soft input embeddings
+    """
+    compute_dtype = torch.float32
+    E = embedding_matrix                                       # (V, D)
+
+    mask_pos = (input_ids == mask_token_id)                    # (B, T)
+
+    if not mask_pos.any():
+        return E[input_ids].to(embedding_matrix.dtype)
+
+    out = E[input_ids].to(compute_dtype)
+
+    masked_logits = logits[mask_pos]                           # (M, V)
+    lam = lambda_tensor.squeeze(-1)[mask_pos].to(compute_dtype).unsqueeze(-1)  # (M, 1)
+
+    # Top-k tokens and renormalised weights pi (== softmax over top-k logits).
+    topk_logits, topk_indices = torch.topk(masked_logits, k=top_k, dim=-1)  # (M, k)
+    pi = torch.softmax(topk_logits.to(compute_dtype), dim=-1)               # (M, k)
+
+    # Target expected embedding e_target = \sum \pi_i e_{topk_i}
+    topk_embs = E[topk_indices].to(compute_dtype)              # (M, k, D)
+    e_target = (pi.unsqueeze(-1) * topk_embs).sum(dim=-2)       # (M, D)
+
+    mask_emb = E[mask_token_id].to(compute_dtype)              # (D,)
+    mask_norm = mask_emb.norm()                                # scalar
+
+    # LERP in embedding space: (1 - lambda)*mask_emb + lambda*e_target
+    e_lerp = (1.0 - lam) * mask_emb.unsqueeze(0) + lam * e_target  # (M, D)
+
+    raw_lerp_norms = e_lerp.norm(dim=-1)                       # (M,)
+
+    # Explicit Norm Restoration: Rescale back to match original mask_norm
+    e_renorm = F.normalize(e_lerp, dim=-1, eps=eps) * mask_norm # (M, D)
+    renorm_norms = e_renorm.norm(dim=-1)                       # (M,)
+
+    out = out.index_put((mask_pos,), e_renorm)
+
+    if stats is not None:
+        stats["feedback_norm_mean"] = renorm_norms.mean().detach()
+        stats["feedback_norm_std"] = renorm_norms.std(unbiased=False).detach()
+        stats["raw_lerp_norm_mean"] = raw_lerp_norms.mean().detach()
+        stats["feedback_norms"] = renorm_norms.detach()
+
+    return out.to(embedding_matrix.dtype)
+
 
 class TransparencyHead(nn.Module):
     def __init__(self, mask_token_id, trans_args):
@@ -157,6 +222,10 @@ class TransparencyHead(nn.Module):
         self.last_lambda_mean = None
         self.last_lambda_std = None
         self.last_slerp_angle_mean = None
+        self.last_feedback_norm_mean = None
+        self.last_feedback_norm_std = None
+        self.last_raw_lerp_norm_mean = None
+        self.last_feedback_norms = None
 
     @property
     def scale(self):
@@ -217,12 +286,10 @@ class TransparencyHead(nn.Module):
         temperature = self.temperature if self.transparency_alg == "mixinputs_with_temp" else 1.0
         mask_positions = (input_ids == self.mask_token_id)  # (B, T)
 
-        # slerp_sm and topk never use p_full. Restrict the softmax to masked
+        # slerp_sm, lerp_renorm, and topk never use p_full. Restrict the softmax to masked
         # positions only (avoids full (B,T,V) softmax for unmasked tokens).
-        if self.transparency_alg in ("slerp_sm", "mixinputs_with_topk"):
+        if self.transparency_alg in ("slerp_sm", "lerp_renorm", "mixinputs_with_topk"):
             # GATHER: Select only the logits for masked positions
-            #-----------changed------------
-
             masked_logits = logits_prelim[mask_positions]      # (M, V)
             neg_entropy = logits_prelim.new_zeros(input_ids.shape)
             if self.fixed_lambda is None and masked_logits.shape[0] > 0:
@@ -239,7 +306,6 @@ class TransparencyHead(nn.Module):
                 p_full = None
 
         lambda_tensor = self.calculate_lambda_tensor(neg_entropy, mask_positions)
-        # AFTER- changed
         lambda_tensor = lambda_tensor.unsqueeze(-1)  # (B, T, 1)
 
         # Stash the realized mean / std of lambda over masked positions (live logging).
@@ -259,18 +325,49 @@ class TransparencyHead(nn.Module):
                 lambda_tensor, self.mixinputs_k, self.slerp_n_iter, self.epsilon,
                 stats=stats)
             self.last_slerp_angle_mean = stats.get("slerp_angle_mean")
+            self.last_feedback_norm_mean = stats.get("feedback_norm_mean")
+            self.last_feedback_norm_std = stats.get("feedback_norm_std")
+            self.last_feedback_norms = stats.get("feedback_norms")
+            return out
+
+        if self.transparency_alg == "lerp_renorm":
+            # Norm-Renormalized LERP feedback in embedding space; returns inputs_embeds (B,T,D).
+            assert embedding_matrix is not None, \
+                "transparency_alg='lerp_renorm' requires the token embedding matrix"
+            stats = {}
+            out = lerp_renorm_sm_feedback(
+                input_ids, logits_prelim, embedding_matrix, self.mask_token_id,
+                lambda_tensor, self.mixinputs_k, self.epsilon,
+                stats=stats)
+            self.last_feedback_norm_mean = stats.get("feedback_norm_mean")
+            self.last_feedback_norm_std = stats.get("feedback_norm_std")
+            self.last_raw_lerp_norm_mean = stats.get("raw_lerp_norm_mean")
+            self.last_feedback_norms = stats.get("feedback_norms")
             return out
 
         if self.transparency_alg == "mixinputs_with_topk":
-            # GATHER: Select only the logits for masked positions
-            #masked_logits = logits_prelim[mask_positions]
-            
             if masked_logits.shape[0] > 0:
                 # COMPUTE: Get top-k indices and probs for masked items
                 topk_indices_masked, topk_probs_masked = self.get_only_topk_probs(
                     masked_logits, self.mixinputs_k
                 )
                 
+                # Compute feedback embedding norms if embedding matrix is provided
+                if embedding_matrix is not None:
+                    with torch.no_grad():
+                        compute_dtype = torch.float32
+                        E = embedding_matrix
+                        topk_embs = E[topk_indices_masked].to(compute_dtype)
+                        e_target = (topk_probs_masked.to(compute_dtype).unsqueeze(-1) * topk_embs).sum(dim=-2)
+                        mask_emb = E[self.mask_token_id].to(compute_dtype)
+                        lam = masked_lambdas.to(compute_dtype).unsqueeze(-1)
+                        e_lerp = (1.0 - lam) * mask_emb.unsqueeze(0) + lam * e_target
+                        lerp_norms = e_lerp.norm(dim=-1).detach()
+                        self.last_feedback_norm_mean = lerp_norms.mean()
+                        self.last_feedback_norm_std = lerp_norms.std(unbiased=False)
+                        self.last_raw_lerp_norm_mean = lerp_norms.mean()
+                        self.last_feedback_norms = lerp_norms
+
                 # SCATTER: Create full (B, T, k) tensors
                 topk_indices = torch.zeros(
                     (input_ids.shape[0], input_ids.shape[1], self.mixinputs_k), 

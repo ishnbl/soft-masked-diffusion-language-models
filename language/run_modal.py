@@ -191,7 +191,14 @@ def train(
             raise FileNotFoundError(f"Cache directory not found at {dat_path}. Aborting to prevent re-tokenization costs.")
 
     # ── build the hydra command ───────────────────────────────────────────────
-    alg_tag = "topk" if transparency_alg == "mixinputs_with_topk" else "slerp"
+    if transparency_alg == "mixinputs_with_topk":
+        alg_tag = "topk"
+    elif transparency_alg == "slerp_sm":
+        alg_tag = "slerp"
+    elif transparency_alg == "lerp_renorm":
+        alg_tag = "lerp_renorm"
+    else:
+        alg_tag = transparency_alg
     group = f"slerp_vs_topk_v2_{model}_{data}_seed{seed}"
     run_name = f"{alg_tag}-ft-v2-{model}-{data}-seed{seed}"
     out_dir = f"{OUT_DIR}/{group}/{alg_tag}"
@@ -343,12 +350,14 @@ def main(
     )
 
     algs = []
-    if alg in ("topk", "both"):
+    if alg in ("topk", "both", "all"):
         algs.append("mixinputs_with_topk")
-    if alg in ("slerp", "both"):
+    if alg in ("slerp", "both", "all"):
         algs.append("slerp_sm")
+    if alg in ("lerp_renorm", "renorm", "all"):
+        algs.append("lerp_renorm")
     if not algs:
-        raise ValueError(f"--alg must be 'topk', 'slerp', or 'both'; got '{alg}'")
+        raise ValueError(f"--alg must be 'topk', 'slerp', 'lerp_renorm', 'both', or 'all'; got '{alg}'")
 
     if parallel and len(algs) > 1:
         # Spawn both on separate A100s; wait for both to finish
