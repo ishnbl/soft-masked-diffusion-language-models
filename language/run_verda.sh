@@ -53,35 +53,55 @@ LOG_EVERY=3
 DATA_DIR="/workspace/data"
 OUT_DIR="/workspace/outputs"
 FIXED_LAMBDA=-1.0
+RELIABILITY_CONDITIONED="false"
+RELIABILITY_START=0.05
+RELIABILITY_FULL=0.25
+RELIABILITY_BETA=0.99
+INIT_CENTRE=-10.0
+SM_PROB_WARMUP_STEPS=0
+EXTRA_HYDRA_ARGS=()
 
 # ── Parse arguments ───────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --num-gpus)            NUM_GPUS="$2";           shift 2 ;;
-    --base-ckpt)           BASE_CKPT="$2";          shift 2 ;;
-    --seed)                SEED="$2";               shift 2 ;;
-    --max-steps)           MAX_STEPS="$2";          shift 2 ;;
-    --model)               MODEL="$2";              shift 2 ;;
-    --data)                DATA="$2";               shift 2 ;;
-    --slerp-n-iter)        SLERP_N_ITER="$2";       shift 2 ;;
-    --global-batch-size)   GLOBAL_BATCH_SIZE="$2";  shift 2 ;;
-    --batch-size)          BATCH_SIZE="$2";         shift 2 ;;
-    --num-workers)         NUM_WORKERS="$2";        shift 2 ;;
-    --checkpoint-every)    CHECKPOINT_EVERY="$2";   shift 2 ;;
-    --log-every)           LOG_EVERY="$2";          shift 2 ;;
-    --data-dir)            DATA_DIR="$2";           shift 2 ;;
-    --out-dir)             OUT_DIR="$2";            shift 2 ;;
-    --fixed-lambda)        FIXED_LAMBDA="$2";       shift 2 ;;
-    *) echo "Unknown arg: $1"; exit 1 ;;
+    --num-gpus)                NUM_GPUS="$2";               shift 2 ;;
+    --base-ckpt)               BASE_CKPT="$2";              shift 2 ;;
+    --seed)                    SEED="$2";                   shift 2 ;;
+    --max-steps)               MAX_STEPS="$2";              shift 2 ;;
+    --model)                   MODEL="$2";                  shift 2 ;;
+    --data)                    DATA="$2";                   shift 2 ;;
+    --slerp-n-iter)            SLERP_N_ITER="$2";           shift 2 ;;
+    --global-batch-size)       GLOBAL_BATCH_SIZE="$2";      shift 2 ;;
+    --batch-size)              BATCH_SIZE="$2";             shift 2 ;;
+    --num-workers)             NUM_WORKERS="$2";            shift 2 ;;
+    --checkpoint-every)        CHECKPOINT_EVERY="$2";       shift 2 ;;
+    --log-every)               LOG_EVERY="$2";              shift 2 ;;
+    --data-dir)                DATA_DIR="$2";               shift 2 ;;
+    --out-dir)                 OUT_DIR="$2";                shift 2 ;;
+    --fixed-lambda)            FIXED_LAMBDA="$2";           shift 2 ;;
+    --reliability-conditioned) RELIABILITY_CONDITIONED="$2"; shift 2 ;;
+    --reliability-start)       RELIABILITY_START="$2";       shift 2 ;;
+    --reliability-full)        RELIABILITY_FULL="$2";        shift 2 ;;
+    --reliability-beta)        RELIABILITY_BETA="$2";        shift 2 ;;
+    --init-centre)             INIT_CENTRE="$2";             shift 2 ;;
+    --sm-prob-warmup-steps)    SM_PROB_WARMUP_STEPS="$2";    shift 2 ;;
+    *) EXTRA_HYDRA_ARGS+=("$1"); shift ;;
   esac
 done
 
 # ── Preflight checks ─────────────────────────────────────────
-if [ ! -f "$BASE_CKPT" ]; then
-  echo "ERROR: Checkpoint not found at $BASE_CKPT"
-  echo "Download it from Google Drive and place it at $BASE_CKPT"
-  echo "  (or pass --base-ckpt /your/actual/path/mdlm_owt.ckpt)"
-  exit 1
+FINETUNE_VAL="${BASE_CKPT}"
+if [ "$BASE_CKPT" = "none" ]; then
+  FINETUNE_VAL=""
+fi
+
+if [ -n "$FINETUNE_VAL" ]; then
+  if [ ! -f "$FINETUNE_VAL" ]; then
+    echo "ERROR: Checkpoint not found at $FINETUNE_VAL"
+    echo "Download it from Google Drive and place it at $FINETUNE_VAL"
+    echo "  (or pass --base-ckpt /your/actual/path/mdlm_owt.ckpt)"
+    exit 1
+  fi
 fi
 
 if ! python -c "import torch; assert torch.cuda.is_available(), 'No CUDA'" 2>/dev/null; then
@@ -159,7 +179,11 @@ CMD=(
   algo.tran_head.slerp_n_iter="${SLERP_N_ITER}"
   algo.tran_head.mixinputs_k=3
   algo.tran_head.init_scale=0.5
-  algo.tran_head.init_centre=-4
+  algo.tran_head.init_centre="${INIT_CENTRE}"
+  algo.tran_head.reliability_conditioned="${RELIABILITY_CONDITIONED}"
+  algo.tran_head.reliability_start="${RELIABILITY_START}"
+  algo.tran_head.reliability_full="${RELIABILITY_FULL}"
+  algo.tran_head.reliability_beta="${RELIABILITY_BETA}"
   model="${MODEL}"
   data="${DATA}"
   data.cache_dir="${DATA_DIR}/owt_cache"
@@ -180,17 +204,21 @@ CMD=(
   optim.lr=3e-5
   optim.tran_head_lr=0.01
   optim.sm_prob=0.8
+  optim.sm_prob_warmup_steps="${SM_PROB_WARMUP_STEPS}"
   optim.sm_t_min=0.2
   optim.sm_t_max=0.8
   lr_scheduler.num_warmup_steps=200
   sampling.predictor=sm
   eval.compute_generative_perplexity=False
   eval.generate_samples=False
-  training.finetune_path="${BASE_CKPT}"
+  training.finetune_path="${FINETUNE_VAL}"
   checkpointing.resume_from_ckpt=false
   callbacks.checkpoint_every_n_steps.every_n_train_steps="${CHECKPOINT_EVERY}"
+  callbacks.checkpoint_monitor=null
   wandb.group="${GROUP}"
   wandb.name="${RUN_NAME}"
+  wandb.project="pretraining"
+  ++wandb.entity="slerp-on-smdlm"
   ++hydra.run.dir="${RUN_OUT_DIR}"
   ++checkpointing.save_dir="${RUN_OUT_DIR}"
 )
@@ -201,7 +229,7 @@ if python -c "import sys; sys.exit(0 if float('${FIXED_LAMBDA}') >= 0.0 else 1)"
   echo "[train] Fixed lambda override: ${FIXED_LAMBDA}"
 fi
 
-"${CMD[@]}"
+"${CMD[@]}" "${EXTRA_HYDRA_ARGS[@]}"
 
 echo ""
 echo "[done] Outputs saved to: $RUN_OUT_DIR"

@@ -55,9 +55,11 @@ class FreezeBackboneCallback(pl.Callback):
         )
 
     def on_train_batch_start(self, trainer, pl_module, batch, batch_idx):
-        if (self._frozen
-                and not self._unfrozen
-                and trainer.global_step >= self.freeze_until_step):
+        if (
+            self._frozen
+            and not self._unfrozen
+            and trainer.global_step >= self.freeze_until_step
+        ):
             n = self._set_backbone_grad(pl_module, requires_grad=True)
             self._unfrozen = True
             pl_module.print(

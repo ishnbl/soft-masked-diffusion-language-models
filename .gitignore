@@ -191,3 +191,23 @@ language/patches/modified/*
 
 # CommandCode
 .commandcode/
+
+# IDE files
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Checkpoints/Weights
+*.ckpt
+*.pt
+*.bin
+
+# Local checkpoint and logs
+mdlm.ckpt
+language/.hydra/
+language/outputs/
+*.out
