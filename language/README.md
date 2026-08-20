@@ -27,7 +27,7 @@ bash setup.sh
 ```
 
 ## Checkpoints Language Modeling
-You can download the pretrained soft-masking checkpoints for language modeling (OpenWebText) from this [Box folder](https://ibm.box.com/v/soft-masked-dlm-checkpoints). They contain models in the iso-compute and iso-update regimes, both with pretraining continuation or training from scratch. 
+You can download the pretrained soft-masking checkpoints for language modeling (OpenWebText) from our [Hugging Face repository](https://huggingface.co/lavanyanigam/soft-masking-checkpoints). They contain models in the iso-compute and iso-update regimes, both with pretraining continuation or training from scratch. 
 
 ## Training the Models
 
@@ -154,20 +154,19 @@ This part of the repository was built on top of [Duo](https://github.com/s-sahoo
 ## Citation
 If you use the work released here for your research, please consider citing our papers:
 ```bibtex
-@inproceedings{
-hersche_softmasking_2026,
-title={Soft-Masked Diffusion Language Models},
-author={Hersche, Michael and Moor-Smith, Samuel and Hofmann, Thomas and Rahimi, Abbas},
-booktitle={The Fourteenth International Conference on Learning Representations (ICLR)},
-year={2026},
-url={https://openreview.net/forum?id=Gba02UMvrG}
+@article{lost_in_interpolation_2026,
+  title={Lost in Interpolation: Why Predictive Feedback Fails in Diffusion Language Models},
+  author={Nigam, Lavanya and contributors},
+  journal={Conference on Language Modeling (COLM)},
+  year={2026}
 }
 
-@article{lost_in_interpolation_2026,
-title={Lost in Interpolation: Why Predictive Feedback Fails in Diffusion Language Models},
-author={Hersche, Michael and Moor-Smith, Samuel and Hofmann, Thomas and Rahimi, Abbas},
-journal={arXiv preprint},
-year={2026}
+@inproceedings{hersche_softmasking_2026,
+  title={Soft-Masked Diffusion Language Models},
+  author={Hersche, Michael and Moor-Smith, Samuel and Hofmann, Thomas and Rahimi, Abbas},
+  booktitle={The Fourteenth International Conference on Learning Representations (ICLR)},
+  year={2026},
+  url={https://openreview.net/forum?id=Gba02UMvrG}
 }
 ```
 

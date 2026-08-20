@@ -1,56 +1,79 @@
-# Soft-Masked Diffusion Language Models & Spherical Soft-Masking
+# Lost in Interpolation: Spherical Soft-Masking (SLERP-SM) for Diffusion Language Models
 
-This repository hosts the official implementation of two papers on Soft-Masked Diffusion Language Models (MDLMs):
-
-1. **Soft-Masked Diffusion Language Models (ICLR 2026)** [[Paper]](https://openreview.net/forum?id=Gba02UMvrG)
-2. **Lost in Interpolation: Why Predictive Feedback Fails in Diffusion Language Models (COLM 2026)**
+Official PyTorch implementation of **Spherical Soft-Masking (SLERP-SM)** for masked diffusion language models (MDLMs), from the paper:
+> **Lost in Interpolation: Why Predictive Feedback Fails in Diffusion Language Models** (COLM 2026)
 
 <div align="center">
-  <img src='./assets/slerp_vs_lerp.png' width="90%"/>
+  <img src='./assets/slerp_vs_lerp.png' width="85%"/>
 </div>
 
 ---
 
 ## Overview
 
-### 1. Soft-Masking (ICLR 2026)
-Soft-masking (SM) replaces the standard binary "keep mask or replace" decision in MDLMs with a continuous, confidence-weighted blend of the mask token embedding `m` and a weighted superposition of the top-`k` predicted token embeddings `v_i`:
+Soft-masking provides predictive feedback by continuously blending the mask token embedding with a superposition of top-$k$ predictions. However, standard linear interpolation (**LERP-SM**) suffers from a severe **norm-collapse failure**:
 
-```math
-\tilde{x}_{t-1} = (1 - \lambda) \cdot m + \lambda \sum_{i \in \text{top-}k} \pi_i \cdot v_i
-```
-
-where `lambda` (in range `[0, 1)`) is derived from the model's predictive entropy. This approach accelerates convergence during fine-tuning and continued pre-training.
-
-### 2. Spherical Soft-Masking (COLM 2026)
-The follow-up paper, *Lost in Interpolation*, identifies a **norm-collapse failure** in the original linear interpolation (LERP) scheme. Because token embeddings in modern language models exhibit a hyperspherical structure (concentrating on a shell in D-dimensions where `m` and `v_i` subtend an angle of ~73 degrees), straight-line interpolation (LERP) cuts through the hyperspherical shell, systematically shrinking the embedding norm by 20% to 40%. This introduces out-of-distribution inputs that degrade training.
-
-To solve this, we propose **Spherical Soft-Masking (SLERP-SM)**:
-* **Weighted Fréchet (Karcher) Mean**: Aggregates the top-`k` normalized predictions onto the unit sphere via iterative Karcher flow.
-* **Geodesic Interpolation (SLERP)**: Interpolates between the normalized mask embedding and the Fréchet mean along the shared great-circle arc:
-
-```math
-s = \frac{\sin((1-\lambda)\Omega)}{\sin\Omega}\hat{m} + \frac{\sin(\lambda\Omega)}{\sin\Omega}\mu^*
-```
-
-* **Norm Rescaling**: Scales the unit direction vector `s` back to the original mask token norm (`r_m = ||m||`), ensuring backbone compatibility.
+* **Hyperspherical Geometry**: Language model token embeddings concentrate on a spherical shell in high dimensions. Straight-line interpolation (LERP) cuts *through* the hypersphere, systematically shrinking embedding norms by 20–40% and feeding out-of-distribution inputs to the backbone.
+* **Spherical Soft-Masking (SLERP-SM)**:
+  1. **Fréchet (Karcher) Mean**: Aggregates top-$k$ normalized predictions on the unit sphere $\mathcal{S}^{d-1}$.
+  2. **Geodesic Interpolation (SLERP)**: Interpolates along the great-circle arc between the mask embedding and the Fréchet mean.
+  3. **Norm Preservation**: Rescales the interpolated direction back to the original mask embedding norm, preventing norm collapse and gradient explosion.
 
 ---
 
-## Key Results
+## Key Results (OpenWebText)
 
-* **Fixed Lambda = 0.3 Stable Training**: Linear interpolation (LERP) causes monotonic perplexity degradation. Spherical interpolation (SLERP-SM) remains stable, opening a **3.9 PPL gap** by the end of training on OpenWebText.
-* **Generation Quality (MAUVE)**: Under a fixed mixing weight, SLERP-SM yields dramatically higher-quality generations, achieving a **MAUVE score of 0.258** compared to **0.055** for LERP.
-* **Learned Lambda Improvement**: Under a learned feedback schedule, SLERP-SM achieves lower NLL and perplexity compared to both LERP and the vanilla MDLM baseline.
+* **Stability at Fixed $\lambda = 0.3$**: LERP causes monotonic perplexity degradation, while SLERP-SM remains fully stable, outperforming LERP by **3.9 PPL**.
+* **Generation Quality**: SLERP-SM achieves a **MAUVE score of 0.258** (vs. **0.055** for LERP) and lower generative perplexity (**26.9** vs. **48.2**).
+* **Learned Scheduling**: Outperforms both linear soft-masking and vanilla MDLM baselines under adaptive feedback schedules.
 
 ---
 
-## Reproducing Results
-Please refer to the [Coding](./coding/) and [Language](./language/) folders for experiments with MDLM. 
+## Quickstart
 
-## Checkpoints Language Modeling
-SLERP Soft-masking checkpoints for language modeling (OpenWebText) can be found in this [link](https://huggingface.co/lavanyanigam/soft-masking-checkpoints). 
+This repository contains implementations for both **Language Modeling** and **Code Generation**:
 
-## Acknowledgement
-The coding part was built on top of [Dream-7B](https://github.com/DreamLM/Dream) and the language modeling part based on [Duo](https://github.com/s-sahoo/duo) and ReMDM [ReMDM](https://github.com/kuleshov-group/remdm).
+### 1. Language Modeling (`language/`)
+Built on MDLM / Duo:
+```bash
+cd language
+conda create -n sm-env python=3.12 -y && conda activate sm-env
+pip install -r requirements.txt
+pip install flash_attn==2.7.4.post1 --no-build-isolation
 
+# Finetune with SLERP-SM (multi-GPU)
+NUM_GPUS=2 BASE_CKPT=/path/to/mdlm.ckpt bash scripts/run_slerp_multigpu.sh
+```
+See [`language/README.md`](./language/README.md) for full pretraining, evaluation, and Modal / Slurm scripts.
+
+### 2. Code Generation (`coding/`)
+Built on Dream-7B with PEFT / DoRA:
+```bash
+cd coding/train
+python train.py "./configs/base_configs/config_1.json" "./configs/datasets_softmasking/config_coding.json"
+```
+See [`coding/README.md`](./coding/README.md) for fine-tuning and HumanEval / EvalPlus evaluation.
+
+---
+
+## Model Checkpoints
+
+Pretrained checkpoints for Language Modeling (OpenWebText) are available on Hugging Face:
+👉 **[HuggingFace Checkpoints (lavanyanigam/soft-masking-checkpoints)](https://huggingface.co/lavanyanigam/soft-masking-checkpoints)**
+
+---
+
+## Citation
+
+If you find this work or codebase useful, please cite:
+```bibtex
+@article{lost_in_interpolation_2026,
+  title={Lost in Interpolation: Why Predictive Feedback Fails in Diffusion Language Models},
+  author={Nigam, Lavanya and contributors},
+  journal={Conference on Language Modeling (COLM)},
+  year={2026}
+}
+```
+
+## Acknowledgements
+This codebase builds upon [Duo](https://github.com/s-sahoo/duo), [ReMDM](https://github.com/kuleshov-group/remdm), [Dream-7B](https://github.com/DreamLM/Dream), and [Soft-Masked DLMs](https://openreview.net/forum?id=Gba02UMvrG).
