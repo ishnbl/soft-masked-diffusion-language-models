@@ -11,21 +11,13 @@ Official PyTorch implementation of **Spherical Soft-Masking (SLERP-SM)** for mas
 
 ## Overview
 
-Soft-masking provides predictive feedback by continuously blending the mask token embedding with a superposition of top-$k$ predictions. However, standard linear interpolation (**LERP-SM**) suffers from a severe **norm-collapse failure**:
+Soft-masking provides predictive feedback by continuously blending the mask token embedding with a superposition of top-k predictions. However, standard linear interpolation (**LERP-SM**) suffers from a severe **norm-collapse failure**:
 
 * **Hyperspherical Geometry**: Language model token embeddings concentrate on a spherical shell in high dimensions. Straight-line interpolation (LERP) cuts *through* the hypersphere, systematically shrinking embedding norms by 20–40% and feeding out-of-distribution inputs to the backbone.
 * **Spherical Soft-Masking (SLERP-SM)**:
   1. **Fréchet (Karcher) Mean**: Aggregates top-$k$ normalized predictions on the unit sphere $\mathcal{S}^{d-1}$.
   2. **Geodesic Interpolation (SLERP)**: Interpolates along the great-circle arc between the mask embedding and the Fréchet mean.
   3. **Norm Preservation**: Rescales the interpolated direction back to the original mask embedding norm, preventing norm collapse and gradient explosion.
-
----
-
-## Key Results (OpenWebText)
-
-* **Stability at Fixed $\lambda = 0.3$**: LERP causes monotonic perplexity degradation, while SLERP-SM remains fully stable, outperforming LERP by **3.9 PPL**.
-* **Generation Quality**: SLERP-SM achieves a **MAUVE score of 0.258** (vs. **0.055** for LERP) and lower generative perplexity (**26.9** vs. **48.2**).
-* **Learned Scheduling**: Outperforms both linear soft-masking and vanilla MDLM baselines under adaptive feedback schedules.
 
 ---
 
@@ -61,19 +53,6 @@ See [`coding/README.md`](./coding/README.md) for fine-tuning and HumanEval / Eva
 Pretrained checkpoints for Language Modeling (OpenWebText) are available on Hugging Face:
 👉 **[HuggingFace Checkpoints (lavanyanigam/soft-masking-checkpoints)](https://huggingface.co/lavanyanigam/soft-masking-checkpoints)**
 
----
-
-## Citation
-
-If you find this work or codebase useful, please cite:
-```bibtex
-@article{lost_in_interpolation_2026,
-  title={Lost in Interpolation: Why Predictive Feedback Fails in Diffusion Language Models},
-  author={Nigam, Lavanya and contributors},
-  journal={Conference on Language Modeling (COLM)},
-  year={2026}
-}
-```
 
 ## Acknowledgements
 This codebase builds upon [Duo](https://github.com/s-sahoo/duo), [ReMDM](https://github.com/kuleshov-group/remdm), [Dream-7B](https://github.com/DreamLM/Dream), and [Soft-Masked DLMs](https://openreview.net/forum?id=Gba02UMvrG).
